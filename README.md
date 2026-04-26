@@ -7,3 +7,4 @@
 3. Запустить файл start_pytorch.py для обучения модели
 4. После обучения запустить файл realtime_diagnostic.py
 
+![Результат](https://raw.githubusercontent.com/AudioDiagnosticTeam/build/v1.0/result.png)
