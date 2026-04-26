@@ -1,0 +1,224 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Diagnost 2.0</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.6.0/css/all.min.css">
+  <style>
+    body {
+      background: radial-gradient(circle at 50% 30%, #1a2338, #0a0f1c 70%);
+      min-height: 100vh;
+      font-family: system-ui, sans-serif;
+    }
+    .glass {
+      background: rgba(255,255,255,0.07);
+      backdrop-filter: blur(28px);
+      border: 1px solid rgba(255,255,255,0.15);
+      box-shadow: 0 15px 50px rgba(0,0,0,0.7);
+    }
+    .logo-glow { text-shadow: 0 0 40px #22d3ee; }
+  </style>
+</head>
+<body class="flex items-center justify-center p-8">
+
+  <div class="w-full max-w-3xl glass rounded-3xl p-10 text-white">
+
+    <!-- Заголовок -->
+    <div class="flex justify-center items-center gap-5 mb-12">
+      <div class="w-20 h-20 bg-gradient-to-br from-cyan-400 to-blue-600 rounded-3xl flex items-center justify-center text-5xl shadow-2xl">
+        🔎
+      </div>
+      <div>
+        <h1 class="text-6xl font-bold tracking-tighter logo-glow">Diagnost</h1>
+        <p class="text-cyan-400 tracking-widest text-sm">2.0 • СИСТЕМА ЗВУКОВОЙ ДИАГНОСТИКИ</p>
+      </div>
+    </div>
+
+    <!-- Результат -->
+    <div id="resultPanel" class="min-h-[320px]">
+      <div id="startScreen" class="text-center py-20">
+        <div class="text-8xl mb-8">🎤</div>
+        <p class="text-3xl font-light">Готовы проверить двигатель?</p>
+        <p class="text-zinc-400 mt-4">Нажмите кнопку для записи звука (5 секунд)</p>
+      </div>
+    </div>
+
+    <!-- Кнопка записи -->
+    <button id="recordBtn" onclick="startRecording()" 
+            class="mt-8 w-full py-8 rounded-3xl bg-white text-black font-bold text-2xl flex items-center justify-center gap-4 hover:bg-cyan-300 transition-all">
+      <i class="fas fa-microphone"></i>
+      <span id="btnText">Начать диагностику (5 сек)</span>
+    </button>
+
+    <!-- Индикатор записи -->
+    <div id="recordingUI" class="hidden mt-10 text-center">
+      <div class="flex items-center justify-center gap-4 text-red-400 mb-6">
+        <div class="w-6 h-6 bg-red-500 rounded-full animate-ping"></div>
+        <span class="text-2xl font-medium">ИДЁТ ЗАПИСЬ...</span>
+      </div>
+      <div class="h-4 bg-zinc-800 rounded-2xl overflow-hidden">
+        <div id="progress" class="h-full bg-gradient-to-r from-red-500 to-orange-500 transition-all duration-5000"></div>
+      </div>
+    </div>
+
+    <!-- Нижние кнопки -->
+    <div class="flex gap-4 mt-12">
+      <button onclick="newDiagnosis()" 
+              class="flex-1 glass py-6 rounded-2xl font-medium hover:bg-white/10 transition">Новый диагноз</button>
+      <button onclick="showReport()" 
+              class="flex-1 glass py-6 rounded-2xl font-medium hover:bg-white/10 transition">Подробный отчёт</button>
+    </div>
+  </div>
+
+  <script>
+    let mediaRecorder = null;
+    let audioChunks = [];
+
+    async function startRecording() {
+      const btn = document.getElementById('recordBtn');
+      const recordingUI = document.getElementById('recordingUI');
+      const startScreen = document.getElementById('startScreen');
+
+      try {
+        const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+        const audioContext = new (window.AudioContext || window.webkitAudioContext)({ sampleRate: 22050 });
+        const source = audioContext.createMediaStreamSource(stream);
+        const recorder = new MediaRecorder(stream);
+        audioChunks = [];
+
+        recorder.ondataavailable = e => audioChunks.push(e.data);
+        
+        recorder.onstop = async () => {
+          const blob = new Blob(audioChunks, { type: 'audio/webm' });
+          const arrayBuffer = await blob.arrayBuffer();
+          const audioBuffer = await audioContext.decodeAudioData(arrayBuffer);
+
+          const wavBlob = await audioBufferToWav(audioBuffer);
+          await sendToServer(wavBlob);
+
+          stream.getTracks().forEach(t => t.stop());
+        };
+
+        recorder.start();
+        btn.disabled = true;
+        btn.classList.add('!bg-red-600', '!text-white');
+        document.getElementById('btnText').innerHTML = 'Запись... 5 секунд';
+
+        recordingUI.classList.remove('hidden');
+        startScreen.classList.add('hidden');
+        document.getElementById('progress').style.width = '100%';
+
+        setTimeout(() => {
+          if (recorder.state === "recording") recorder.stop();
+        }, 5000);
+
+      } catch (err) {
+        alert("Ошибка доступа к микрофону: " + err.message);
+        resetUI();
+      }
+    }
+
+    // Конвертация AudioBuffer → WAV
+    async function audioBufferToWav(buffer) {
+      const numChannels = buffer.numberOfChannels;
+      const length = buffer.length * numChannels * 2;
+      const result = new ArrayBuffer(44 + length);
+      const view = new DataView(result);
+      let pos = 0;
+
+      function writeString(str) {
+        for (let i = 0; i < str.length; i++) view.setUint8(pos + i, str.charCodeAt(i));
+        pos += str.length;
+      }
+
+      writeString('RIFF'); pos += 4;
+      writeString('WAVE');
+      writeString('fmt ');
+      view.setUint32(pos, 16, true); pos += 4;
+      view.setUint16(pos, 1, true); pos += 2;
+      view.setUint16(pos, numChannels, true); pos += 2;
+      view.setUint32(pos, buffer.sampleRate, true); pos += 4;
+      view.setUint32(pos, buffer.sampleRate * numChannels * 2, true); pos += 4;
+      view.setUint16(pos, numChannels * 2, true); pos += 2;
+      view.setUint16(pos, 16, true); pos += 2;
+      writeString('data');
+      view.setUint32(pos, length, true); pos += 4;
+
+      for (let i = 0; i < numChannels; i++) {
+        const channel = buffer.getChannelData(i);
+        for (let j = 0; j < buffer.length; j++) {
+          let sample = Math.max(-1, Math.min(1, channel[j]));
+          view.setInt16(pos, sample < 0 ? sample * 0x8000 : sample * 0x7FFF, true);
+          pos += 2;
+        }
+      }
+
+      return new Blob([result], { type: 'audio/wav' });
+    }
+
+    async function sendToServer(blob) {
+      const formData = new FormData();
+      formData.append('audio', blob, 'recording.wav');
+
+      try {
+        const res = await fetch('/diagnose', { method: 'POST', body: formData });
+        const data = await res.json();
+
+        if (res.ok) {
+          showResult(data);
+        } else {
+          alert("Ошибка: " + (data.error || "Неизвестная ошибка"));
+        }
+      } catch (e) {
+        alert("Не удалось отправить аудио на сервер.\nУбедитесь, что программа запущена.");
+      }
+      resetUI();
+    }
+
+    function showResult(data) {
+      const color = data.color || 'emerald';
+
+      document.getElementById('resultPanel').innerHTML = `
+        <div class="glass p-10 rounded-3xl">
+          <div class="flex items-center gap-8">
+            <div class="text-7xl">${data.icon}</div>
+            <div class="flex-1">
+              <h2 class="text-4xl font-semibold">${data.display_name}</h2>
+              <p class="text-zinc-400 mt-2">Уверенность модели: <span class="font-mono text-${color}-400">${data.confidence}%</span></p>
+            </div>
+            <div class="text-right">
+              <div class="text-7xl font-bold text-${color}-400">${data.confidence}</div>
+              <div class="text-sm text-zinc-500">%</div>
+            </div>
+          </div>
+        </div>
+      `;
+    }
+
+    function resetUI() {
+      const btn = document.getElementById('recordBtn');
+      btn.disabled = false;
+      btn.classList.remove('!bg-red-600', '!text-white');
+      document.getElementById('btnText').innerHTML = '<i class="fas fa-microphone"></i> Начать диагностику (5 сек)';
+      document.getElementById('recordingUI').classList.add('hidden');
+    }
+
+    function newDiagnosis() {
+      document.getElementById('resultPanel').innerHTML = `
+        <div id="startScreen" class="text-center py-20">
+          <div class="text-8xl mb-8">🎤</div>
+          <p class="text-3xl font-light">Готовы проверить двигатель?</p>
+          <p class="text-zinc-400 mt-4">Нажмите кнопку для записи звука (5 секунд)</p>
+        </div>
+      `;
+      resetUI();
+    }
+
+    function showReport() {
+      alert("Подробный отчёт с рекомендациями появится в следующей версии.");
+    }
+  </script>
+</body>
+</html>
