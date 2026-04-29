@@ -85,8 +85,8 @@ class SoundDataset(Dataset):
         self.y = []
         self.augment = augment
         
-        classes = [d for d in os.listdir(data_path) 
-                   if os.path.isdir(os.path.join(data_path, d)) and d not in ['diagnostic', 'Отчёты']]
+        classes = sorted([d for d in os.listdir(data_path)
+                          if os.path.isdir(os.path.join(data_path, d)) and d not in ['diagnostic', 'Отчёты']])
         
         print(f"Найдены классы: {classes}")
         
@@ -251,6 +251,12 @@ for epoch in range(EPOCHS):
         print(f"Эпоха {epoch+1}/{EPOCHS} | Train Acc: {train_acc:.2%} | Test Acc: {test_acc:.2%} | LR: {optimizer.param_groups[0]['lr']:.6f}")
 
 print(f"\n🎯 ЛУЧШАЯ ТОЧНОСТЬ: {best_acc:.2%}")
+
+# Сохраняем имена классов для UI
+import json
+with open('model_classes.json', 'w', encoding='utf-8') as f:
+    json.dump(dataset.classes, f, ensure_ascii=False)
+print(f"💾 Классы сохранены: {dataset.classes}")
 
 # Загружаем лучшую модель
 model.load_state_dict(torch.load('fault_diagnosis_model_best.pth'))
