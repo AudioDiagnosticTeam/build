@@ -122,9 +122,6 @@ export default function DiagnosticsPage({ waveData, predictions, sourceValues, e
               </div>
             ))}
           </div>
-          <p className="text-[10px] text-[#64748B] mt-2 shrink-0">
-            Важно: Данная диагностика является предварительной и не заменяет профессионального осмотра.
-          </p>
         </div>
       </div>
     </div>

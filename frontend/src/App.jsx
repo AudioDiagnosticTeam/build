@@ -2,6 +2,7 @@ import { useState, useEffect, useRef } from 'react'
 import './index.css'
 import Sidebar         from './components/Sidebar'
 import Header          from './components/Header'
+import Footer          from './components/Footer'
 import DiagnosticsPage from './components/DiagnosticsPage'
 import SettingsPanel   from './components/SettingsPanel'
 
@@ -128,6 +129,8 @@ export default function App() {
 
           {showSettings && <SettingsPanel />}
         </div>
+
+        <Footer />
       </div>
     </div>
   )
