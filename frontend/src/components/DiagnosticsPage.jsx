@@ -53,6 +53,7 @@ function healthLabel(pct) {
 
 export default function DiagnosticsPage({ waveData, predictions, sourceValues, elapsed }) {
   const [micVol, setMicVol] = useState(70)
+  const [view, setView]     = useState('side')
 
   // p(НОРМА) — индикатор здоровья
   const normaPct   = predictions ? Math.round((predictions['НОРМА'] ?? 0) * 100) : null
@@ -145,19 +146,18 @@ export default function DiagnosticsPage({ waveData, predictions, sourceValues, e
         {/* Car visualization */}
         <div className="flex-1 bg-[#111827] rounded-xl border border-[#1E2D45] flex flex-col overflow-hidden">
           <div className="flex justify-end gap-1.5 p-2 shrink-0">
-            {[['🚗','Вид сбоку'],['3D','3D вид']].map(([icon, tip]) => (
-              <button key={tip} title={tip}
-                className="w-8 h-7 flex items-center justify-center bg-[#1A2235] border border-[#1E2D45] rounded-md text-[11px] text-[#E2E8F0] hover:bg-[#1E2D45] transition-colors">
-                {icon}
-              </button>
-            ))}
-            <button className="w-8 h-7 flex items-center justify-center bg-[#1A2235] border border-[#1E2D45] rounded-md text-[#E2E8F0] hover:bg-[#1E2D45] transition-colors">
+            <button onClick={() => setView(v => v === 'side' ? '3d' : 'side')}
+              className="px-2.5 h-7 flex items-center justify-center bg-[#1A2235] border border-[#1E2D45] rounded-md text-[11px] text-[#E2E8F0] hover:bg-[#1E2D45] transition-colors">
+              {view === 'side' ? '3D' : 'Вид сбоку'}
+            </button>
+            <button onClick={() => setView('side')}
+              className="w-8 h-7 flex items-center justify-center bg-[#1A2235] border border-[#1E2D45] rounded-md text-[#E2E8F0] hover:bg-[#1E2D45] transition-colors">
               <RotateCcw size={13} />
             </button>
           </div>
 
           <div className="flex-1 relative overflow-hidden px-2 pb-2">
-            <CarView zones={sourceValues ?? [0.3, 0.2, 0.1, 0.05]} />
+            <CarView zones={sourceValues ?? [0.3, 0.2, 0.1, 0.05]} view={view} />
 
             {/* Бейдж нормы на машине */}
             {normaPct !== null && (
@@ -171,10 +171,6 @@ export default function DiagnosticsPage({ waveData, predictions, sourceValues, e
               </div>
             )}
 
-            <div className="absolute bottom-4 right-4 flex items-center gap-2 bg-[#111827]/70 backdrop-blur border border-[#1E2D45] rounded-full px-3 py-1.5">
-              <span className="text-[10px] text-[#64748B]">Вид сбоку</span>
-              <span className="text-[11px]">🚗</span>
-            </div>
           </div>
         </div>
       </div>

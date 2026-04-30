@@ -1,7 +1,6 @@
 import { useState } from 'react'
-import { RotateCcw } from 'lucide-react'
 
-const TABS = ['Общие', 'Нейросеть', 'Аудио', 'Визуализация']
+const TABS = ['Общие', 'Аудио', 'Визуализация']
 
 function Slider({ label, desc, min, max, step=0.01, value, onChange }) {
   return (
@@ -60,12 +59,7 @@ function Divider() {
 }
 
 export default function SettingsPanel() {
-  const [tab, setTab] = useState(1)
-  const [windowSize, setWindowSize]   = useState(5.0)
-  const [stepSize,   setStepSize]     = useState(1.0)
-  const [threshold,  setThreshold]    = useState(0.60)
-  const [dropout,    setDropout]      = useState(0.30)
-  const [augment,    setAugment]      = useState(true)
+  const [tab, setTab] = useState(0)
   const [autoStart,  setAutoStart]    = useState(false)
   const [notify,     setNotify]       = useState(true)
   const [dots,       setDots]         = useState(true)
@@ -92,49 +86,6 @@ export default function SettingsPanel() {
 
       <div className="flex-1 overflow-y-auto px-5 pb-4">
 
-        {/* Нейросеть */}
-        {tab === 1 && (
-          <div>
-            <SectionTitle>Параметры модели</SectionTitle>
-            <Select label="Модель" value="SoundNet Automotive v2.3"
-              options={['SoundNet Automotive v2.3','SoundNet Automotive v2.0','CustomCNN v1.0']}
-              onChange={() => {}} />
-            <Slider label="Размер входного окна (сек)"
-              desc="Длина аудиофрагмента, анализируемого нейросетью"
-              min={1} max={10} step={0.5} value={windowSize} onChange={setWindowSize} />
-            <Slider label="Шаг анализа (сек)"
-              desc="Интервал между последовательными анализами"
-              min={0.5} max={5} step={0.5} value={stepSize} onChange={setStepSize} />
-            <Slider label="Порог уверенности"
-              desc="Минимальная уверенность для отображения результата"
-              min={0} max={1} step={0.05} value={threshold} onChange={setThreshold} />
-            <Select label="Максимум источников звука" value="4"
-              options={['1','2','3','4','5']} onChange={() => {}} />
-
-            <Divider />
-            <SectionTitle>Архитектура модели</SectionTitle>
-            <Select label="Тип модели"     value="CNN + Transformer"
-              options={['CNN + Transformer','CNN','Transformer','ResNet']} onChange={() => {}} />
-            <Select label="Количество слоёв" value="12"
-              options={['8','12','16','24']} onChange={() => {}} />
-            <Select label="Размер скрытого слоя" value="512"
-              options={['256','512','1024']} onChange={() => {}} />
-            <Select label="Функция активации" value="GELU"
-              options={['GELU','ReLU','SiLU']} onChange={() => {}} />
-            <Slider label="Dropout" min={0} max={0.8} step={0.05} value={dropout} onChange={setDropout} />
-
-            <Divider />
-            <SectionTitle>Обучение и данные</SectionTitle>
-            <Select label="Набор данных" value="AutoSounds Dataset v1.4"
-              options={['AutoSounds Dataset v1.4','Custom Dataset']} onChange={() => {}} />
-            <Toggle label="Аугментация данных" checked={augment} onChange={setAugment} />
-
-            <button className="mt-3 w-full flex items-center justify-center gap-2 border border-[#3B82F6] text-[#3B82F6] hover:bg-[#3B82F6]/10 text-[12px] py-2 rounded-lg transition-colors">
-              <RotateCcw size={13} /> Сбросить настройки модели
-            </button>
-          </div>
-        )}
-
         {/* Общие */}
         {tab === 0 && (
           <div>
@@ -146,7 +97,7 @@ export default function SettingsPanel() {
         )}
 
         {/* Аудио */}
-        {tab === 2 && (
+        {tab === 1 && (
           <div>
             <SectionTitle>Параметры аудио</SectionTitle>
             <Slider label="Частота дискретизации (кГц)" min={8} max={48} step={1} value={22} onChange={() => {}} />
@@ -157,7 +108,7 @@ export default function SettingsPanel() {
         )}
 
         {/* Визуализация */}
-        {tab === 3 && (
+        {tab === 2 && (
           <div>
             <SectionTitle>Визуализация</SectionTitle>
             <Toggle label="Анимация точек"    checked={dots}   onChange={setDots} />

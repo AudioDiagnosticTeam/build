@@ -1,23 +1,34 @@
 import { useEffect, useRef, useState } from 'react'
 
-const ZONES = [
-  { x: 0.36, y: 0.50, color: '#EF4444' }, // Двигатель
-  { x: 0.46, y: 0.44, color: '#F59E0B' }, // Ремень / навесное
-  { x: 0.27, y: 0.56, color: '#60A5FA' }, // Впускная
-  { x: 0.68, y: 0.62, color: '#A855F7' }, // Выхлоп
+// Zones for side view (car.png = left-side profile)
+const ZONES_SIDE = [
+  { x: 0.20, y: 0.48, color: '#EF4444' }, // Двигатель — передний капот
+  { x: 0.28, y: 0.40, color: '#F59E0B' }, // Ремень / навесное — верх двигателя
+  { x: 0.14, y: 0.40, color: '#60A5FA' }, // Впускная — передний воздухозаборник
+  { x: 0.84, y: 0.65, color: '#A855F7' }, // Выхлоп — задний глушитель
+]
+
+// Zones for 3D/top view (car-3d.png)
+const ZONES_3D = [
+  { x: 0.36, y: 0.50, color: '#EF4444' },
+  { x: 0.46, y: 0.44, color: '#F59E0B' },
+  { x: 0.27, y: 0.56, color: '#60A5FA' },
+  { x: 0.68, y: 0.62, color: '#A855F7' },
 ]
 
 function hexToRgb(hex) {
   return [parseInt(hex.slice(1,3),16), parseInt(hex.slice(3,5),16), parseInt(hex.slice(5,7),16)]
 }
 
-export default function CarView({ zones = [0.5, 0.3, 0.2, 0.1] }) {
+export default function CarView({ zones = [0.5, 0.3, 0.2, 0.1], view = 'side' }) {
   const canvasRef = useRef(null)
   const animRef   = useRef(null)
   const phaseRef  = useRef(0)
   const [hasImg, setHasImg] = useState(false)
 
-  // Canvas — только точки, прозрачный фон, учитываем devicePixelRatio
+  const ZONES = view === 'side' ? ZONES_SIDE : ZONES_3D
+  const imgSrc = view === 'side' ? '/car-side.png' : '/car.png'
+
   useEffect(() => {
     const canvas = canvasRef.current
     if (!canvas) return
@@ -39,7 +50,6 @@ export default function CarView({ zones = [0.5, 0.3, 0.2, 0.1] }) {
         const [r, g, b] = hexToRgb(color)
         const dx = x * w, dy = y * h
 
-        // Внешнее кольцо
         const rr = (12 + pulse * 22) * (0.5 + intensity * 0.5)
         const grad = ctx.createRadialGradient(dx, dy, 0, dx, dy, rr)
         grad.addColorStop(0, `rgba(${r},${g},${b},${0.5 * intensity * (1 - pulse)})`)
@@ -47,18 +57,15 @@ export default function CarView({ zones = [0.5, 0.3, 0.2, 0.1] }) {
         ctx.fillStyle = grad
         ctx.beginPath(); ctx.arc(dx, dy, rr, 0, Math.PI*2); ctx.fill()
 
-        // Среднее кольцо
         ctx.fillStyle = `rgba(${r},${g},${b},${0.35 * intensity})`
         ctx.beginPath(); ctx.arc(dx, dy, 13 + intensity*5, 0, Math.PI*2); ctx.fill()
 
-        // Основная точка с glow
         ctx.shadowColor = color
         ctx.shadowBlur = 10 * intensity
         ctx.fillStyle = color
         ctx.beginPath(); ctx.arc(dx, dy, 7, 0, Math.PI*2); ctx.fill()
         ctx.shadowBlur = 0
 
-        // Белый центр
         ctx.fillStyle = 'rgba(255,255,255,0.92)'
         ctx.beginPath(); ctx.arc(dx, dy, 2.5, 0, Math.PI*2); ctx.fill()
       })
@@ -69,9 +76,8 @@ export default function CarView({ zones = [0.5, 0.3, 0.2, 0.1] }) {
 
     draw()
     return () => cancelAnimationFrame(animRef.current)
-  }, [zones])
+  }, [zones, view])
 
-  // Resize с учётом devicePixelRatio
   useEffect(() => {
     const resize = () => {
       const c = canvasRef.current
@@ -91,9 +97,9 @@ export default function CarView({ zones = [0.5, 0.3, 0.2, 0.1] }) {
     <div className="relative w-full h-full rounded-xl overflow-hidden"
          style={{ background: 'radial-gradient(ellipse at 50% 40%, #1a2540 0%, #111827 100%)' }}>
 
-      {/* Картинка — нативный <img> для максимального качества */}
       <img
-        src="/car.png"
+        key={imgSrc}
+        src={imgSrc}
         alt=""
         onLoad={() => setHasImg(true)}
         onError={() => setHasImg(false)}
@@ -101,12 +107,13 @@ export default function CarView({ zones = [0.5, 0.3, 0.2, 0.1] }) {
       />
 
       {!hasImg && (
-        <div className="absolute inset-0 flex items-end justify-center pb-3">
-          <span className="text-[#64748B] text-[11px]">Поместите car.png в frontend/public/</span>
+        <div className="absolute inset-0 flex items-center justify-center">
+          <span className="text-[#64748B] text-[11px]">
+            {view === 'side' ? 'Поместите car-side.png в frontend/public/' : 'Поместите car.png в frontend/public/'}
+          </span>
         </div>
       )}
 
-      {/* Canvas только для точек */}
       <canvas ref={canvasRef} className="absolute inset-0 w-full h-full" />
     </div>
   )
