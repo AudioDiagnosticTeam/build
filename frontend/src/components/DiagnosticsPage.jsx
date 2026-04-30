@@ -204,7 +204,7 @@ export default function DiagnosticsPage({ waveData, predictions, sourceValues, e
         </div>
 
         {/* Analysis */}
-        <div className="flex-1 bg-[#111827] rounded-xl border border-[#1E2D45] p-3.5 flex flex-col">
+        <div className="flex-1 bg-[#111827] rounded-xl border border-[#1E2D45] p-3.5 flex flex-col min-h-0 overflow-hidden">
           <span className="text-[13px] font-semibold text-[#E2E8F0] mb-2.5 shrink-0">
             Предварительный анализ
           </span>
@@ -222,15 +222,15 @@ export default function DiagnosticsPage({ waveData, predictions, sourceValues, e
           )}
 
           {!normal && (
-            <div className="flex flex-col gap-2 flex-1">
+            <div className="flex flex-col gap-2 flex-1 overflow-y-auto min-h-0">
               {(diagnoses ?? DEFAULT_DIAGNOSES).map((d, i) => (
-                <div key={i} className="flex items-center gap-3 bg-[#1A2235] rounded-lg px-3.5 py-2.5">
-                  <span className="w-2.5 h-2.5 rounded-full shrink-0 mt-0.5" style={{ background: d.color }} />
+                <div key={i} className="flex items-center gap-3 bg-[#1A2235] rounded-lg px-3.5 py-2.5 shrink-0">
+                  <span className="w-2.5 h-2.5 rounded-full shrink-0" style={{ background: d.color }} />
                   <div className="flex-1 min-w-0">
                     <p className="text-[12px] font-medium text-[#E2E8F0] leading-tight">{d.title}</p>
                     <p className="text-[11px] text-[#64748B] leading-tight mt-0.5">{d.sub}</p>
                   </div>
-                  <span className="text-[11px] font-medium shrink-0 text-right" style={{ color: d.color }}>
+                  <span className="text-[11px] font-medium shrink-0 text-right whitespace-nowrap" style={{ color: d.color }}>
                     {d.sev}
                   </span>
                 </div>
