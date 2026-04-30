@@ -51,7 +51,7 @@ function healthLabel(pct) {
   return 'Неисправность'
 }
 
-export default function DiagnosticsPage({ waveData, predictions, sourceValues, elapsed }) {
+export default function DiagnosticsPage({ waveData, predictions, sourceValues, elapsed, showDots = true }) {
   const [micVol, setMicVol] = useState(70)
   const [view, setView]     = useState('side')
 
@@ -157,7 +157,7 @@ export default function DiagnosticsPage({ waveData, predictions, sourceValues, e
           </div>
 
           <div className="flex-1 relative overflow-hidden px-2 pb-2">
-            <CarView zones={sourceValues ?? [0.3, 0.2, 0.1, 0.05]} view={view} />
+            <CarView zones={sourceValues ?? [0.3, 0.2, 0.1, 0.05]} view={view} showDots={showDots} />
 
             {/* Бейдж нормы на машине */}
             {normaPct !== null && (

@@ -1,15 +1,22 @@
 import asyncio
 import json
+import shutil
+import tempfile
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 import numpy as np
 import uvicorn
-from fastapi import FastAPI, WebSocket, WebSocketDisconnect
+from fastapi import FastAPI, File, Form, UploadFile, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
 
 from engine  import DiagnosticEngine
 from trainer import Trainer
+
+DATASET_PATH  = Path(__file__).parent.parent / 'dataset'
+HF_CONFIG     = Path(__file__).parent.parent / 'hf_config.json'
+EXCLUDED_DIRS = {'diagnostic', 'Отчёты', 'Diagnost_2_0', 'diagnostics', '.cache'}
 
 app = FastAPI(title="AudioDiagnostic API", version="3.0")
 
@@ -50,6 +57,126 @@ def health():
         "classes": engine.classes,
     }
 
+
+# ─── HF Config API ────────────────────────────────────────────────────────────
+
+@app.get("/hf/config")
+def get_hf_config():
+    if HF_CONFIG.exists():
+        cfg = json.loads(HF_CONFIG.read_text(encoding='utf-8'))
+        tok = cfg.get('token', '')
+        return {"repo": cfg.get('repo', ''), "token_set": bool(tok),
+                "token_preview": (tok[:8] + '…') if tok else ''}
+    return {"repo": "", "token_set": False, "token_preview": ""}
+
+@app.post("/hf/config")
+def save_hf_config(repo: str = Form(...), token: str = Form(...)):
+    HF_CONFIG.write_text(json.dumps({"repo": repo, "token": token}, ensure_ascii=False), encoding='utf-8')
+    return {"ok": True}
+
+
+# ─── Dataset API ──────────────────────────────────────────────────────────────
+
+@app.get("/dataset")
+def get_dataset():
+    if not DATASET_PATH.exists():
+        return {"classes": {}}
+    result = {}
+    for cls_dir in sorted(DATASET_PATH.iterdir()):
+        if cls_dir.is_dir() and cls_dir.name not in EXCLUDED_DIRS and not cls_dir.name.startswith('.'):
+            files = sorted([
+                f.name for f in cls_dir.iterdir()
+                if f.is_file() and f.suffix.lower() in {'.wav', '.mp3'}
+            ])
+            result[cls_dir.name] = {"count": len(files), "files": files}
+    return {"classes": result}
+
+
+@app.post("/dataset/class/{name}")
+def create_class(name: str):
+    (DATASET_PATH / name).mkdir(parents=True, exist_ok=True)
+    return {"ok": True}
+
+
+@app.delete("/dataset/class/{name}")
+def delete_class(name: str):
+    path = DATASET_PATH / name
+    if path.exists():
+        shutil.rmtree(path)
+    return {"ok": True}
+
+
+@app.delete("/dataset/file/{cls}/{filename}")
+def delete_file(cls: str, filename: str):
+    path = DATASET_PATH / cls / filename
+    if path.exists():
+        path.unlink()
+    return {"ok": True}
+
+
+@app.post("/dataset/upload/{cls}")
+async def upload_files(cls: str, files: list[UploadFile] = File(...)):
+    dest = DATASET_PATH / cls
+    dest.mkdir(parents=True, exist_ok=True)
+    saved = []
+    for f in files:
+        out = dest / f.filename
+        # Avoid overwrite
+        stem, ext = Path(f.filename).stem, Path(f.filename).suffix
+        n = 1
+        while out.exists():
+            out = dest / f"{stem}_{n}{ext}"
+            n += 1
+        out.write_bytes(await f.read())
+        saved.append(out.name)
+    return {"ok": True, "saved": saved}
+
+
+@app.post("/dataset/cut/{cls}")
+async def cut_audio(
+    cls: str,
+    segment_sec: int = Form(6),
+    file: UploadFile = File(...),
+):
+    import librosa
+    import soundfile as sf
+
+    dest = DATASET_PATH / cls
+    dest.mkdir(parents=True, exist_ok=True)
+
+    suffix = Path(file.filename).suffix or '.wav'
+    with tempfile.NamedTemporaryFile(suffix=suffix, delete=False) as tmp:
+        tmp.write(await file.read())
+        tmp_path = Path(tmp.name)
+
+    try:
+        signal, sr = librosa.load(str(tmp_path), sr=22050, mono=True)
+        chunk = int(segment_sec * sr)
+        segments = 0
+
+        # Find next free index
+        existing = [f.stem for f in dest.iterdir() if f.suffix.lower() in {'.wav', '.mp3'}]
+        nums = []
+        for s in existing:
+            try: nums.append(int(s.split('_')[-1]))
+            except: pass
+        idx = (max(nums) + 1) if nums else 0
+
+        for start in range(0, len(signal), chunk):
+            piece = signal[start:start + chunk]
+            if len(piece) < sr:       # drop clips < 1 second
+                continue
+            out_path = dest / f"output_{idx:03d}.wav"
+            sf.write(str(out_path), piece, sr)
+            idx += 1
+            segments += 1
+
+        return {"ok": True, "segments": segments, "class": cls}
+    finally:
+        tmp_path.unlink(missing_ok=True)
+
+
+# ──────────────────────────────────────────────────────────────────────────────
 
 @app.websocket("/ws")
 async def ws_endpoint(ws: WebSocket):
@@ -249,6 +376,48 @@ async def ws_train(ws: WebSocket):
 
             elif data['type'] == 'train_stop':
                 trainer.stop()
+
+            elif data['type'] == 'hf_push':
+                cfg     = json.loads(HF_CONFIG.read_text(encoding='utf-8')) if HF_CONFIG.exists() else {}
+                token   = cfg.get('token', '')
+                repo_id = cfg.get('repo', '')
+
+                def _push_hf():
+                    try:
+                        from huggingface_hub import HfApi
+                        api = HfApi(token=token)
+
+                        audio_files = [
+                            f for f in DATASET_PATH.rglob('*')
+                            if f.is_file()
+                            and f.suffix.lower() in {'.wav', '.mp3'}
+                            and not any(p.startswith('.') for p in f.relative_to(DATASET_PATH).parts)
+                        ]
+                        on_msg({'type': 'hf_push_log', 'text': f'Подготовка {len(audio_files)} файлов для загрузки...'})
+                        on_msg({'type': 'hf_push_start', 'total': len(audio_files)})
+
+                        skipped = 0
+                        for i, f in enumerate(audio_files):
+                            rel = f.relative_to(DATASET_PATH).as_posix()
+                            try:
+                                api.upload_file(
+                                    path_or_fileobj=str(f),
+                                    path_in_repo=rel,
+                                    repo_id=repo_id,
+                                    repo_type='dataset',
+                                )
+                            except Exception as e:
+                                skipped += 1
+                                on_msg({'type': 'hf_push_log', 'text': f'Пропуск {rel}: {e}'})
+                            on_msg({'type': 'hf_push_progress', 'done': i + 1, 'total': len(audio_files), 'file': rel})
+
+                        on_msg({'type': 'hf_push_done',
+                                'total': len(audio_files), 'skipped': skipped, 'repo': repo_id})
+                    except Exception as e:
+                        import traceback
+                        on_msg({'type': 'hf_push_error', 'text': str(e), 'trace': traceback.format_exc()})
+
+                await loop.run_in_executor(executor, _push_hf)
 
     except WebSocketDisconnect:
         trainer.stop()

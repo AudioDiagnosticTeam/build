@@ -20,7 +20,7 @@ function hexToRgb(hex) {
   return [parseInt(hex.slice(1,3),16), parseInt(hex.slice(3,5),16), parseInt(hex.slice(5,7),16)]
 }
 
-export default function CarView({ zones = [0.5, 0.3, 0.2, 0.1], view = 'side' }) {
+export default function CarView({ zones = [0.5, 0.3, 0.2, 0.1], view = 'side', showDots = true }) {
   const canvasRef = useRef(null)
   const animRef   = useRef(null)
   const phaseRef  = useRef(0)
@@ -43,40 +43,61 @@ export default function CarView({ zones = [0.5, 0.3, 0.2, 0.1], view = 'side' })
       ctx.save()
       ctx.scale(dpr, dpr)
 
-      phaseRef.current += 0.05
+      phaseRef.current += 0.04
       ZONES.forEach(({ x, y, color }, i) => {
         const intensity = Math.max(0, Math.min(1, zones[i] ?? 0.3))
-        const pulse = (Math.sin(phaseRef.current + i * 1.4) + 1) / 2
         const [r, g, b] = hexToRgb(color)
         const dx = x * w, dy = y * h
 
-        const rr = (12 + pulse * 22) * (0.5 + intensity * 0.5)
+        // ── Расходящиеся кольца (зависят от интенсивности) ──
+        const numRings = intensity > 0.55 ? 2 : 1
+        for (let ri = 0; ri < numRings; ri++) {
+          const t = ((phaseRef.current * 0.7 + ri * Math.PI + i * 1.4) % (Math.PI * 2)) / (Math.PI * 2)
+          const ringR   = 8 + t * (18 + intensity * 42)
+          const ringOpa = intensity * (1 - t) * 0.85
+          if (ringOpa > 0.01) {
+            ctx.strokeStyle = `rgba(${r},${g},${b},${ringOpa})`
+            ctx.lineWidth   = 1.5 + intensity * 2
+            ctx.shadowColor = color
+            ctx.shadowBlur  = 6 * intensity
+            ctx.beginPath(); ctx.arc(dx, dy, ringR, 0, Math.PI * 2); ctx.stroke()
+            ctx.shadowBlur  = 0
+          }
+        }
+
+        // ── Мягкое свечение ──
+        const pulse = (Math.sin(phaseRef.current + i * 1.4) + 1) / 2
+        const rr = (10 + pulse * 18) * (0.4 + intensity * 0.6)
         const grad = ctx.createRadialGradient(dx, dy, 0, dx, dy, rr)
-        grad.addColorStop(0, `rgba(${r},${g},${b},${0.5 * intensity * (1 - pulse)})`)
+        grad.addColorStop(0, `rgba(${r},${g},${b},${0.4 * intensity})`)
         grad.addColorStop(1, `rgba(${r},${g},${b},0)`)
         ctx.fillStyle = grad
         ctx.beginPath(); ctx.arc(dx, dy, rr, 0, Math.PI*2); ctx.fill()
 
-        ctx.fillStyle = `rgba(${r},${g},${b},${0.35 * intensity})`
-        ctx.beginPath(); ctx.arc(dx, dy, 13 + intensity*5, 0, Math.PI*2); ctx.fill()
-
+        // ── Основная точка ──
         ctx.shadowColor = color
-        ctx.shadowBlur = 10 * intensity
-        ctx.fillStyle = color
-        ctx.beginPath(); ctx.arc(dx, dy, 7, 0, Math.PI*2); ctx.fill()
-        ctx.shadowBlur = 0
+        ctx.shadowBlur  = 10 * intensity
+        ctx.fillStyle   = color
+        ctx.beginPath(); ctx.arc(dx, dy, 6, 0, Math.PI*2); ctx.fill()
+        ctx.shadowBlur  = 0
 
+        // ── Белый центр ──
         ctx.fillStyle = 'rgba(255,255,255,0.92)'
-        ctx.beginPath(); ctx.arc(dx, dy, 2.5, 0, Math.PI*2); ctx.fill()
+        ctx.beginPath(); ctx.arc(dx, dy, 2.2, 0, Math.PI*2); ctx.fill()
       })
 
       ctx.restore()
       animRef.current = requestAnimationFrame(draw)
     }
 
-    draw()
+    if (showDots) {
+      draw()
+    } else {
+      const canvas = canvasRef.current
+      if (canvas) canvas.getContext('2d').clearRect(0, 0, canvas.width, canvas.height)
+    }
     return () => cancelAnimationFrame(animRef.current)
-  }, [zones, view])
+  }, [zones, view, showDots])
 
   useEffect(() => {
     const resize = () => {

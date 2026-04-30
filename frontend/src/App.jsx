@@ -6,6 +6,7 @@ import Footer          from './components/Footer'
 import DiagnosticsPage from './components/DiagnosticsPage'
 import HistoryPage     from './components/HistoryPage'
 import TrainingPage    from './components/TrainingPage'
+import DatasetPage     from './components/DatasetPage'
 import SettingsPanel   from './components/SettingsPanel'
 
 const FAULT_WEIGHTS = {
@@ -44,6 +45,7 @@ export default function App() {
   const [sourceValues, setSourceValues] = useState([0.3, 0.2, 0.1, 0.05])
   const [status,       setStatus]       = useState({ title: 'Инициализация...', sub: 'Загрузка', level: 'warn' })
   const [history,      setHistory]      = useState([])
+  const [dots,         setDots]         = useState(true)
 
   const wsRef         = useRef(null)
   const clockRef      = useRef(null)
@@ -143,14 +145,16 @@ export default function App() {
                 predictions={predictions}
                 sourceValues={sourceValues}
                 elapsed={elapsed}
+                showDots={dots}
               />
             )}
             {page === 'history' && (
               <HistoryPage history={history} onClear={() => setHistory([])} />
             )}
             {page === 'training' && <TrainingPage />}
+            {page === 'dataset'  && <DatasetPage />}
           </main>
-          {showSettings && <SettingsPanel />}
+          {showSettings && <SettingsPanel dots={dots} onDotsChange={setDots} />}
         </div>
 
         <Footer />
