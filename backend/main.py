@@ -189,38 +189,38 @@ async def ws_train(ws: WebSocket):
                 _hf_stop = False
 
                 def _download_hf():
-                    from huggingface_hub import list_repo_tree, hf_hub_download
-
-                    on_msg({'type': 'hf_log', 'text': f'Подключение к {repo_id}...'})
-
-                    # Собираем список файлов
                     try:
-                        items = list(list_repo_tree(repo_id, repo_type='dataset', recursive=True))
+                        from huggingface_hub import list_repo_files, hf_hub_download
+
+                        on_msg({'type': 'hf_log', 'text': f'Получение списка файлов из {repo_id}...'})
+
+                        all_files = list(list_repo_files(repo_id, repo_type='dataset'))
+                        audio = [f for f in all_files if f.lower().endswith(('.wav', '.WAV', '.mp3'))]
+                        classes = set(f.split('/')[0] for f in audio if '/' in f)
+
+                        on_msg({'type': 'hf_log',
+                                'text': f'Найдено {len(audio)} аудио-файлов, {len(classes)} классов: {", ".join(sorted(classes))}'})
+                        on_msg({'type': 'hf_total', 'total': len(audio)})
+
+                        skipped = 0
+                        for i, fpath in enumerate(audio):
+                            try:
+                                on_msg({'type': 'hf_file', 'text': fpath,
+                                        'done': i, 'total': len(audio), 'size_kb': 0})
+                                hf_hub_download(
+                                    repo_id=repo_id, filename=fpath,
+                                    repo_type='dataset', local_dir=str(local_dir),
+                                )
+                            except Exception as e:
+                                skipped += 1
+                                on_msg({'type': 'hf_log', 'text': f'Пропуск {fpath}: {e}'})
+
+                        on_msg({'type': 'hf_done', 'local_path': str(local_dir),
+                                'total': len(audio), 'audio': len(audio) - skipped})
+
                     except Exception as e:
-                        on_msg({'type': 'hf_error', 'text': f'Ошибка при получении списка файлов: {e}'}); return
-
-                    files = [it for it in items if hasattr(it, 'path') and
-                             any(it.path.lower().endswith(ext) for ext in ('.wav', '.mp3', '.json'))]
-
-                    audio = [f for f in files if f.path.lower().endswith(('.wav', '.mp3'))]
-                    on_msg({'type': 'hf_log', 'text': f'Найдено {len(audio)} аудио-файлов в {len(set(f.path.split("/")[0] for f in audio))} классах'})
-                    on_msg({'type': 'hf_total', 'total': len(files)})
-
-                    for i, item in enumerate(files):
-                        if _hf_stop: return
-                        try:
-                            size_kb = round(getattr(item, 'size', 0) / 1024, 1)
-                            on_msg({'type': 'hf_file', 'text': item.path,
-                                    'done': i, 'total': len(files), 'size_kb': size_kb})
-                            hf_hub_download(
-                                repo_id=repo_id, filename=item.path,
-                                repo_type='dataset', local_dir=str(local_dir),
-                            )
-                        except Exception as e:
-                            on_msg({'type': 'hf_log', 'text': f'Пропуск {item.path}: {e}'})
-
-                    on_msg({'type': 'hf_done', 'local_path': str(local_dir),
-                            'total': len(files), 'audio': len(audio)})
+                        import traceback
+                        on_msg({'type': 'hf_error', 'text': str(e), 'trace': traceback.format_exc()})
 
                 await loop.run_in_executor(executor, _download_hf)
 
