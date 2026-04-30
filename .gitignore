@@ -1,0 +1,7 @@
+__pycache__/
+*.pyc
+dataset/
+temp_recording.wav
+*.tmp
+frontend/node_modules/
+frontend/dist/

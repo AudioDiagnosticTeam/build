@@ -33,7 +33,7 @@ class DiagnosticEngine:
             return False, "PyTorch не установлен"
 
         self.classes = (
-            json.loads(CLASSES_FILE.read_text(encoding="utf-8"))
+            json.loads(CLASSES_FILE.read_text(encoding="utf-8-sig"))
             if CLASSES_FILE.exists()
             else ["НОРМА", "ДРЕБЕЗГ", "СВИСТ", "СКРИП", "СТУК"]
         )
