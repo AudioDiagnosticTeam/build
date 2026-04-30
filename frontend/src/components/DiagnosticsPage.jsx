@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import { RotateCcw, CheckCircle } from 'lucide-react'
+import { RotateCcw, CheckCircle, Activity } from 'lucide-react'
 import CarView from './CarView'
 import Waveform from './Waveform'
 
@@ -31,9 +31,7 @@ function isNormal(probs) {
 function buildDiagnoses(probs) {
   const sorted = Object.entries(probs).sort((a, b) => b[1] - a[1])
   const top    = sorted.filter(([c]) => c !== 'НОРМА').slice(0, 3)
-
-  if (!top.length || isNormal(probs)) return null  // null = штатный режим
-
+  if (!top.length || isNormal(probs)) return null
   return top.map(([cls, prob]) => {
     const color = prob > 0.65 ? '#EF4444' : prob > 0.40 ? '#F59E0B' : '#60A5FA'
     const sev   = prob > 0.65 ? 'Высокая вероятность' : prob > 0.40 ? 'Средняя вероятность' : 'Низкая вероятность'
@@ -41,13 +39,37 @@ function buildDiagnoses(probs) {
   })
 }
 
+// Цвет здоровья по уровню
+function healthColor(pct) {
+  if (pct >= 70) return '#22C55E'
+  if (pct >= 40) return '#F59E0B'
+  return '#EF4444'
+}
+function healthLabel(pct) {
+  if (pct >= 70) return 'Норма'
+  if (pct >= 40) return 'Предупреждение'
+  return 'Неисправность'
+}
+
 export default function DiagnosticsPage({ waveData, predictions, sourceValues, elapsed }) {
   const [micVol, setMicVol] = useState(70)
 
-  const sources  = SOURCES.map((s, i) => ({ ...s, pct: Math.round((sourceValues?.[i] ?? 0) * 100) }))
+  // p(НОРМА) — индикатор здоровья
+  const normaPct   = predictions ? Math.round((predictions['НОРМА'] ?? 0) * 100) : null
+  const faultScale = normaPct !== null ? (100 - normaPct) / 100 : 1 // отклонение от нормы
+
+  // Источники масштабируем с учётом отклонения: когда всё норм — бары малы
+  const sources = SOURCES.map((s, i) => {
+    const raw   = sourceValues?.[i] ?? 0
+    // Если модель говорит НОРМА 90%, усиливаем сигнал отклонения
+    const scaled = normaPct !== null
+      ? Math.min(1, raw * (1 + faultScale * 1.5))
+      : raw
+    return { ...s, pct: Math.round(scaled * 100), raw: Math.round(raw * 100) }
+  })
+
   const diagnoses = predictions ? buildDiagnoses(predictions) : DEFAULT_DIAGNOSES
   const normal    = predictions ? isNormal(predictions) : false
-  const normaPct  = predictions ? Math.round((predictions['НОРМА'] ?? 0) * 100) : null
 
   const s       = elapsed ?? 0
   const timeStr = `${String(Math.floor(s/3600)).padStart(2,'0')}:${String(Math.floor(s/60)%60).padStart(2,'0')}:${String(s%60).padStart(2,'0')}`
@@ -59,30 +81,57 @@ export default function DiagnosticsPage({ waveData, predictions, sourceValues, e
       <div className="flex gap-2.5 flex-1 min-h-0">
 
         {/* Sources card */}
-        <div className="w-[210px] shrink-0 bg-[#111827] rounded-xl border border-[#1E2D45] p-3.5 flex flex-col">
-          <div className="flex items-center gap-1.5 mb-3">
+        <div className="w-[215px] shrink-0 bg-[#111827] rounded-xl border border-[#1E2D45] p-3.5 flex flex-col">
+          <div className="flex items-center gap-1.5 mb-2.5">
             <span className="text-[13px] font-semibold text-[#E2E8F0]">Источник звуков</span>
-            <span className="text-[#64748B] text-[11px] cursor-help" title="Предполагаемый источник на основе анализа">ⓘ</span>
+            <span className="text-[#64748B] text-[11px] cursor-help"
+                  title="Бары показывают отклонение от нормального звука по каждой зоне">ⓘ</span>
           </div>
 
-          {/* Норма — общий статус */}
-          {normal && (
-            <div className="mb-3 flex items-center gap-2 bg-[#22C55E]/10 border border-[#22C55E]/30 rounded-lg px-3 py-2">
-              <CheckCircle size={14} className="text-[#22C55E] shrink-0" />
-              <div>
-                <p className="text-[11px] font-semibold text-[#22C55E]">Штатная работа</p>
-                <p className="text-[10px] text-[#64748B]">Отклонений не выявлено</p>
+          {/* ── Индикатор здоровья ── */}
+          {normaPct !== null ? (
+            <div className="mb-3 rounded-lg border p-2.5"
+                 style={{ background: `${healthColor(normaPct)}12`, borderColor: `${healthColor(normaPct)}40` }}>
+              <div className="flex items-center justify-between mb-1.5">
+                <div className="flex items-center gap-1.5">
+                  <Activity size={11} style={{ color: healthColor(normaPct) }} />
+                  <span className="text-[10px] font-semibold" style={{ color: healthColor(normaPct) }}>
+                    {healthLabel(normaPct)}
+                  </span>
+                </div>
+                <span className="text-[11px] font-bold" style={{ color: healthColor(normaPct) }}>
+                  {normaPct}%
+                </span>
+              </div>
+              {/* Прогресс-бар здоровья */}
+              <div className="h-1.5 bg-[#1A2235] rounded-full overflow-hidden">
+                <div className="h-full rounded-full transition-all duration-700"
+                     style={{ width: `${normaPct}%`, background: healthColor(normaPct) }} />
+              </div>
+              <p className="text-[9px] text-[#475569] mt-1">
+                Вероятность нормальной работы по модели
+              </p>
+            </div>
+          ) : (
+            <div className="mb-3 rounded-lg border border-[#1E2D45] p-2.5 bg-[#1A2235]">
+              <div className="flex items-center gap-1.5">
+                <Activity size={11} className="text-[#475569]" />
+                <span className="text-[10px] text-[#475569]">Ожидание диагностики...</span>
               </div>
             </div>
           )}
 
+          {/* ── Источники (отклонение от нормы) ── */}
+          <p className="text-[9px] text-[#475569] mb-1.5 uppercase tracking-wide">Отклонение по зонам</p>
           <div className="flex flex-col gap-0.5 flex-1">
             {sources.map(({ name, color, pct }) => (
-              <div key={name} className="py-1.5">
-                <div className="flex items-center gap-2 mb-1.5">
-                  <span className="w-2.5 h-2.5 rounded-full shrink-0" style={{ background: color }} />
+              <div key={name} className="py-1">
+                <div className="flex items-center gap-2 mb-1">
+                  <span className="w-2 h-2 rounded-full shrink-0" style={{ background: color }} />
                   <span className="text-[11px] text-[#E2E8F0] flex-1 leading-tight">{name}</span>
-                  <span className="text-[11px] font-semibold text-[#E2E8F0]">{pct}%</span>
+                  <span className="text-[10px] font-semibold" style={{ color: pct > 50 ? color : '#64748B' }}>
+                    {pct}%
+                  </span>
                 </div>
                 <div className="h-1 bg-[#1A2235] rounded-full overflow-hidden">
                   <div className="h-full rounded-full transition-all duration-700"
@@ -102,7 +151,7 @@ export default function DiagnosticsPage({ waveData, predictions, sourceValues, e
                 {icon}
               </button>
             ))}
-            <button title="Сброс" className="w-8 h-7 flex items-center justify-center bg-[#1A2235] border border-[#1E2D45] rounded-md text-[#E2E8F0] hover:bg-[#1E2D45] transition-colors">
+            <button className="w-8 h-7 flex items-center justify-center bg-[#1A2235] border border-[#1E2D45] rounded-md text-[#E2E8F0] hover:bg-[#1E2D45] transition-colors">
               <RotateCcw size={13} />
             </button>
           </div>
@@ -110,13 +159,14 @@ export default function DiagnosticsPage({ waveData, predictions, sourceValues, e
           <div className="flex-1 relative overflow-hidden px-2 pb-2">
             <CarView zones={sourceValues ?? [0.3, 0.2, 0.1, 0.05]} />
 
-            {/* Штатная работа — оверлей на машине */}
-            {normal && (
+            {/* Бейдж нормы на машине */}
+            {normaPct !== null && (
               <div className="absolute top-3 left-1/2 -translate-x-1/2 flex items-center gap-2
-                px-3 py-1.5 bg-[#0C1120]/80 backdrop-blur border border-[#22C55E]/40 rounded-full">
-                <CheckCircle size={12} className="text-[#22C55E]" />
-                <span className="text-[11px] text-[#22C55E] font-medium">
-                  Работает штатно · {normaPct}%
+                px-3 py-1.5 bg-[#0C1120]/80 backdrop-blur rounded-full border"
+                   style={{ borderColor: `${healthColor(normaPct)}50` }}>
+                <span className="w-2 h-2 rounded-full" style={{ background: healthColor(normaPct) }} />
+                <span className="text-[11px] font-medium" style={{ color: healthColor(normaPct) }}>
+                  {healthLabel(normaPct)} · {normaPct}%
                 </span>
               </div>
             )}
@@ -159,7 +209,6 @@ export default function DiagnosticsPage({ waveData, predictions, sourceValues, e
             Предварительный анализ
           </span>
 
-          {/* Норма */}
           {normal && (
             <div className="flex-1 flex flex-col items-center justify-center gap-2">
               <div className="w-12 h-12 rounded-full bg-[#22C55E]/15 border border-[#22C55E]/30 flex items-center justify-center">
@@ -172,7 +221,6 @@ export default function DiagnosticsPage({ waveData, predictions, sourceValues, e
             </div>
           )}
 
-          {/* Неисправности */}
           {!normal && (
             <div className="flex flex-col gap-2 flex-1">
               {(diagnoses ?? DEFAULT_DIAGNOSES).map((d, i) => (
