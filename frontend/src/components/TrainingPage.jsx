@@ -76,8 +76,10 @@ export default function TrainingPage() {
 
   // HuggingFace
   const [hfRepo,   setHfRepo]   = useState('AudioDiagnosticTeam/dataset')
-  const [hfStatus, setHfStatus] = useState('idle')  // idle|loading|done|error
+  const [hfStatus, setHfStatus] = useState('idle')
   const [hfMsg,    setHfMsg]    = useState('')
+  const [hfDone,   setHfDone]   = useState(0)
+  const [hfTotal,  setHfTotal]  = useState(0)
 
   const wsRef = useRef(null)
 
@@ -88,9 +90,22 @@ export default function TrainingPage() {
 
   function handleMsg(msg) {
     // HuggingFace
-    if (msg.type === 'hf_progress') { setHfStatus('loading'); setHfMsg(msg.text) }
-    if (msg.type === 'hf_done')     { setHfStatus('done'); setHfMsg('Датасет скачан!'); setDatasetPath(msg.local_path); addLog(`Сохранён: ${msg.local_path}`, 'success') }
-    if (msg.type === 'hf_error')    { setHfStatus('error'); setHfMsg(msg.text); addLog(`Ошибка скачивания: ${msg.text}`, 'error') }
+    if (msg.type === 'hf_log')   { setHfStatus('loading'); setHfMsg(msg.text); addLog(msg.text) }
+    if (msg.type === 'hf_total') { setHfTotal(msg.total); setHfDone(0) }
+    if (msg.type === 'hf_file')  {
+      setHfDone(msg.done + 1)
+      const size = msg.size_kb ? ` (${msg.size_kb} кБ)` : ''
+      setHfMsg(`[${msg.done+1}/${msg.total}] ${msg.text}${size}`)
+      addLog(`↓ ${msg.text}${size}`)
+    }
+    if (msg.type === 'hf_done')  {
+      setHfStatus('done')
+      setHfMsg(`Готово! ${msg.audio} аудио-файлов скачано`)
+      setDatasetPath(msg.local_path)
+      setHfDone(msg.total); setHfTotal(msg.total)
+      addLog(`✓ Датасет сохранён: ${msg.local_path}`, 'success')
+    }
+    if (msg.type === 'hf_error') { setHfStatus('error'); setHfMsg(msg.text); addLog(`Ошибка: ${msg.text}`, 'error') }
     // Training
     if (msg.type === 'train_log')      addLog(msg.text)
     if (msg.type === 'train_started') {
@@ -185,9 +200,22 @@ export default function TrainingPage() {
         </div>
 
         {hfMsg && (
-          <p className={`text-[10px] ${hfStatus === 'error' ? 'text-[#EF4444]' : hfStatus === 'done' ? 'text-[#22C55E]' : 'text-[#64748B]'}`}>
+          <p className={`text-[10px] truncate ${hfStatus === 'error' ? 'text-[#EF4444]' : hfStatus === 'done' ? 'text-[#22C55E]' : 'text-[#64748B]'}`}>
             {hfMsg}
           </p>
+        )}
+
+        {hfStatus === 'loading' && hfTotal > 0 && (
+          <div>
+            <div className="flex justify-between text-[10px] text-[#64748B] mb-1">
+              <span>Прогресс</span>
+              <span>{hfDone} / {hfTotal} файлов</span>
+            </div>
+            <div className="h-1.5 bg-[#1A2235] rounded-full overflow-hidden">
+              <div className="h-full bg-[#3B82F6] rounded-full transition-all duration-200"
+                   style={{ width: `${hfTotal ? (hfDone/hfTotal)*100 : 0}%` }} />
+            </div>
+          </div>
         )}
       </div>
 

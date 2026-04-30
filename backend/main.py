@@ -170,13 +170,10 @@ async def ws_train(ws: WebSocket):
         while True:
             msg = await queue.get()
             await _send(ws, msg)
-            if msg.get('type') in ('train_complete', 'train_error'):
-                # Перезагружаем модель после обучения
-                if msg.get('type') == 'train_complete':
-                    ok, info = engine.load_model()
-                    await _send(ws, {'type': 'train_log',
-                                     'text': f'Модель перезагружена: {info}'})
-                break
+            if msg.get('type') == 'train_complete':
+                ok, info = engine.load_model()
+                await _send(ws, {'type': 'train_log', 'text': f'Модель перезагружена: {info}'})
+            # sender живёт всё время соединения — не разрываем
 
     send_task = asyncio.create_task(sender())
 
@@ -187,23 +184,45 @@ async def ws_train(ws: WebSocket):
 
             if data['type'] == 'hf_download':
                 repo_id   = data.get('repo_id', 'AudioDiagnosticTeam/dataset')
-                local_dir = str(Path(__file__).parent.parent / 'dataset')
-                await _send(ws, {'type': 'hf_progress',
-                                 'text': f'Скачивание {repo_id} ...'})
-                try:
-                    from huggingface_hub import snapshot_download
-                    path = await loop.run_in_executor(
-                        executor,
-                        lambda: snapshot_download(
-                            repo_id=repo_id,
-                            repo_type='dataset',
-                            local_dir=local_dir,
-                            ignore_patterns=['*.gitattributes', '.gitattributes'],
-                        )
-                    )
-                    await _send(ws, {'type': 'hf_done', 'local_path': path})
-                except Exception as e:
-                    await _send(ws, {'type': 'hf_error', 'text': str(e)})
+                local_dir = Path(__file__).parent.parent / 'dataset'
+                local_dir.mkdir(exist_ok=True)
+                _hf_stop = False
+
+                def _download_hf():
+                    from huggingface_hub import list_repo_tree, hf_hub_download
+
+                    on_msg({'type': 'hf_log', 'text': f'Подключение к {repo_id}...'})
+
+                    # Собираем список файлов
+                    try:
+                        items = list(list_repo_tree(repo_id, repo_type='dataset', recursive=True))
+                    except Exception as e:
+                        on_msg({'type': 'hf_error', 'text': f'Ошибка при получении списка файлов: {e}'}); return
+
+                    files = [it for it in items if hasattr(it, 'path') and
+                             any(it.path.lower().endswith(ext) for ext in ('.wav', '.mp3', '.json'))]
+
+                    audio = [f for f in files if f.path.lower().endswith(('.wav', '.mp3'))]
+                    on_msg({'type': 'hf_log', 'text': f'Найдено {len(audio)} аудио-файлов в {len(set(f.path.split("/")[0] for f in audio))} классах'})
+                    on_msg({'type': 'hf_total', 'total': len(files)})
+
+                    for i, item in enumerate(files):
+                        if _hf_stop: return
+                        try:
+                            size_kb = round(getattr(item, 'size', 0) / 1024, 1)
+                            on_msg({'type': 'hf_file', 'text': item.path,
+                                    'done': i, 'total': len(files), 'size_kb': size_kb})
+                            hf_hub_download(
+                                repo_id=repo_id, filename=item.path,
+                                repo_type='dataset', local_dir=str(local_dir),
+                            )
+                        except Exception as e:
+                            on_msg({'type': 'hf_log', 'text': f'Пропуск {item.path}: {e}'})
+
+                    on_msg({'type': 'hf_done', 'local_path': str(local_dir),
+                            'total': len(files), 'audio': len(audio)})
+
+                await loop.run_in_executor(executor, _download_hf)
 
             elif data['type'] == 'train_start':
                 trainer.start(
