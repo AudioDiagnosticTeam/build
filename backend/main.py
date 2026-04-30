@@ -1,6 +1,7 @@
 import asyncio
 import json
 from concurrent.futures import ThreadPoolExecutor
+from pathlib import Path
 
 import numpy as np
 import uvicorn
@@ -184,7 +185,27 @@ async def ws_train(ws: WebSocket):
             raw  = await ws.receive_text()
             data = json.loads(raw)
 
-            if data['type'] == 'train_start':
+            if data['type'] == 'hf_download':
+                repo_id   = data.get('repo_id', 'AudioDiagnosticTeam/dataset')
+                local_dir = str(Path(__file__).parent.parent / 'dataset')
+                await _send(ws, {'type': 'hf_progress',
+                                 'text': f'Скачивание {repo_id} ...'})
+                try:
+                    from huggingface_hub import snapshot_download
+                    path = await loop.run_in_executor(
+                        executor,
+                        lambda: snapshot_download(
+                            repo_id=repo_id,
+                            repo_type='dataset',
+                            local_dir=local_dir,
+                            ignore_patterns=['*.gitattributes', '.gitattributes'],
+                        )
+                    )
+                    await _send(ws, {'type': 'hf_done', 'local_path': path})
+                except Exception as e:
+                    await _send(ws, {'type': 'hf_error', 'text': str(e)})
+
+            elif data['type'] == 'train_start':
                 trainer.start(
                     dataset_path = data.get('dataset_path', ''),
                     epochs       = int(data.get('epochs', 40)),
