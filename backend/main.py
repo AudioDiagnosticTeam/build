@@ -28,6 +28,19 @@ _model_ok, _model_msg = engine.load_model()
 print(f"[{'OK' if _model_ok else 'WARN'}] {_model_msg}")
 
 
+@app.get("/dialog/folder")
+def open_folder_dialog():
+    """Открывает нативный диалог выбора папки через tkinter"""
+    import tkinter as tk
+    from tkinter import filedialog
+    root = tk.Tk()
+    root.withdraw()
+    root.wm_attributes('-topmost', True)
+    path = filedialog.askdirectory(title="Выберите папку с датасетом")
+    root.destroy()
+    return {"path": path or ""}
+
+
 @app.get("/health")
 def health():
     return {

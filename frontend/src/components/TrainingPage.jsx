@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef } from 'react'
-import { Play, Square, Brain, CheckCircle, AlertTriangle, RefreshCw, Download, ExternalLink } from 'lucide-react'
+import { Play, Square, Brain, CheckCircle, AlertTriangle, RefreshCw, Download, ExternalLink, FolderOpen } from 'lucide-react'
 
 // ── SVG line chart ────────────────────────────────────────────────────────────
 function LineChart({ series, height = 90 }) {
@@ -225,9 +225,25 @@ export default function TrainingPage() {
 
         <div>
           <label className="text-[11px] text-[#64748B] block mb-1">Путь к датасету</label>
-          <input value={datasetPath} onChange={e => setDatasetPath(e.target.value)} disabled={training}
-            className="w-full bg-[#1A2235] border border-[#1E2D45] rounded-lg px-3 py-2 text-[12px] text-[#E2E8F0] outline-none focus:border-[#3B82F6] disabled:opacity-50 font-mono"
-            placeholder="C:\path\to\dataset" />
+          <div className="flex gap-2">
+            <input value={datasetPath} onChange={e => setDatasetPath(e.target.value)} disabled={training}
+              className="flex-1 bg-[#1A2235] border border-[#1E2D45] rounded-lg px-3 py-2 text-[12px] text-[#E2E8F0] outline-none focus:border-[#3B82F6] disabled:opacity-50 font-mono"
+              placeholder="C:\path\to\dataset" />
+            <button
+              onClick={async () => {
+                try {
+                  const res = await fetch('http://localhost:8000/dialog/folder')
+                  const { path } = await res.json()
+                  if (path) setDatasetPath(path)
+                } catch { /* backend недоступен */ }
+              }}
+              disabled={training}
+              title="Выбрать папку"
+              className="w-10 h-[38px] flex items-center justify-center bg-[#1A2235] border border-[#1E2D45] rounded-lg text-[#64748B] hover:text-[#3B82F6] hover:border-[#3B82F6] disabled:opacity-50 transition-colors shrink-0"
+            >
+              <FolderOpen size={16} />
+            </button>
+          </div>
           <p className="text-[10px] text-[#475569] mt-1">Папки внутри = классы (НОРМА, СТУК, СВИСТ ...). Поддерживаются .wav и .mp3</p>
         </div>
 
