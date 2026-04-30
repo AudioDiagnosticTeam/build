@@ -85,13 +85,26 @@ class Trainer:
 
             on_msg({'type': 'train_log', 'text': f'Классы: {classes}'})
 
+            import time
+
+            # Считаем общее количество файлов
+            all_files_map = {}
+            for cls in classes:
+                cls_path = os.path.join(dataset_path, cls)
+                all_files_map[cls] = [f for f in os.listdir(cls_path) if f.lower().endswith(('.wav', '.mp3'))]
+            total_files = sum(len(v) for v in all_files_map.values())
+            on_msg({'type': 'train_log', 'text': f'Всего файлов: {total_files} × {1 + (3 if augment else 0)} = {total_files * (4 if augment else 1)} MFCC'})
+
             X, y = [], []
+            processed = 0
+            t0 = time.time()
+
             for idx, cls in enumerate(classes):
                 cls_path = os.path.join(dataset_path, cls)
-                files = [f for f in os.listdir(cls_path) if f.lower().endswith(('.wav', '.mp3'))]
-                on_msg({'type': 'train_log', 'text': f'  {cls}: {len(files)} файлов'})
+                files = all_files_map[cls]
+                on_msg({'type': 'train_log', 'text': f'▶ {cls}: {len(files)} файлов'})
 
-                for fname in files:
+                for j, fname in enumerate(files):
                     if self._stop.is_set(): break
                     fpath = os.path.join(cls_path, fname)
 
@@ -104,6 +117,17 @@ class Trainer:
                             feat = extract_mfcc(fpath, augment=True)
                             if feat is not None:
                                 X.append(feat); y.append(idx)
+
+                    processed += 1
+                    # Прогресс каждые 50 файлов
+                    if processed % 50 == 0 or processed == total_files:
+                        elapsed = time.time() - t0
+                        rate    = processed / elapsed if elapsed > 0 else 1
+                        eta_sec = int((total_files - processed) / rate)
+                        eta_str = f'{eta_sec//60}м {eta_sec%60}с' if eta_sec > 60 else f'{eta_sec}с'
+                        on_msg({'type': 'train_progress_load',
+                                'done': processed, 'total': total_files,
+                                'text': f'MFCC: {processed}/{total_files} файлов · ETA {eta_str}'})
 
             if not X:
                 on_msg({'type': 'train_error', 'text': 'Не удалось извлечь признаки из файлов'}); return

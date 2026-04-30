@@ -67,6 +67,7 @@ export default function TrainingPage() {
   const [training, setTraining] = useState(false)
   const [phase,    setPhase]    = useState('idle')   // idle|loading|running|done|error
   const [progress, setProgress] = useState({ epoch: 0, total: 0, best_acc: 0 })
+  const [loadProg, setLoadProg] = useState({ done: 0, total: 0 })
   const [logs,     setLogs]     = useState([])
 
   const [trainAcc,  setTrainAcc]  = useState([])
@@ -107,7 +108,11 @@ export default function TrainingPage() {
     }
     if (msg.type === 'hf_error') { setHfStatus('error'); setHfMsg(msg.text); addLog(`Ошибка: ${msg.text}`, 'error') }
     // Training
-    if (msg.type === 'train_log')      addLog(msg.text)
+    if (msg.type === 'train_log')           addLog(msg.text)
+    if (msg.type === 'train_progress_load') {
+      setLoadProg({ done: msg.done, total: msg.total })
+      addLog(msg.text)
+    }
     if (msg.type === 'train_started') {
       setPhase('running'); setProgress({ epoch: 0, total: msg.epochs, best_acc: 0 })
       setTrainAcc([]); setTestAcc([]); setTrainLoss([]); setTestLoss([])
@@ -300,13 +305,30 @@ export default function TrainingPage() {
             {phase === 'error'   && <AlertTriangle size={15} className="text-[#EF4444]" />}
             {(phase === 'running' || phase === 'loading') && <RefreshCw size={15} className="text-[#3B82F6] animate-spin" />}
             <span className={`text-[12px] font-semibold ${phase === 'done' ? 'text-[#22C55E]' : phase === 'error' ? 'text-[#EF4444]' : 'text-[#E2E8F0]'}`}>
-              {phase === 'loading' && 'Загрузка датасета...'}
+              {phase === 'loading' && (loadProg.total > 0
+                ? `Загрузка MFCC: ${loadProg.done} / ${loadProg.total} файлов`
+                : 'Загрузка датасета...')}
               {phase === 'running' && `Эпоха ${progress.epoch} / ${progress.total} · Лучшая ${(progress.best_acc*100).toFixed(1)}%`}
               {phase === 'done'    && `Готово · Лучшая точность ${(progress.best_acc*100).toFixed(1)}%`}
               {phase === 'error'   && 'Ошибка обучения'}
             </span>
           </div>
 
+          {/* Прогресс загрузки датасета */}
+          {phase === 'loading' && loadProg.total > 0 && (
+            <div>
+              <div className="flex justify-between text-[10px] text-[#64748B] mb-1">
+                <span>Извлечение MFCC признаков</span>
+                <span>{Math.round(loadProg.done / loadProg.total * 100)}%</span>
+              </div>
+              <div className="h-1.5 bg-[#1A2235] rounded-full overflow-hidden">
+                <div className="h-full bg-[#F59E0B] rounded-full transition-all duration-300"
+                     style={{ width: `${loadProg.total ? (loadProg.done/loadProg.total)*100 : 0}%` }} />
+              </div>
+            </div>
+          )}
+
+          {/* Прогресс эпох */}
           {(phase === 'running' || phase === 'done') && progress.total > 0 && (
             <div className="h-1.5 bg-[#1A2235] rounded-full overflow-hidden">
               <div className="h-full bg-[#3B82F6] rounded-full transition-all duration-300" style={{ width: `${epochPct}%` }} />
