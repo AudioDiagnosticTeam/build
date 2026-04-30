@@ -4,6 +4,8 @@ import Sidebar         from './components/Sidebar'
 import Header          from './components/Header'
 import Footer          from './components/Footer'
 import DiagnosticsPage from './components/DiagnosticsPage'
+import HistoryPage     from './components/HistoryPage'
+import TrainingPage    from './components/TrainingPage'
 import SettingsPanel   from './components/SettingsPanel'
 
 const FAULT_WEIGHTS = {
@@ -17,10 +19,19 @@ const FAULT_WEIGHTS = {
 function computeSources(probs) {
   const vals = [0, 0, 0, 0]
   for (const [cls, p] of Object.entries(probs)) {
-    const w = FAULT_WEIGHTS[cls] ?? [0,0,0,0]
+    const w = FAULT_WEIGHTS[cls] ?? [0, 0, 0, 0]
     w.forEach((wi, i) => { vals[i] += p * wi })
   }
   return vals.map(v => Math.min(1, v))
+}
+
+function avgPredictions(list) {
+  if (!list.length) return {}
+  const keys = Object.keys(list[0])
+  const result = {}
+  for (const k of keys)
+    result[k] = list.reduce((s, p) => s + (p[k] ?? 0), 0) / list.length
+  return result
 }
 
 export default function App() {
@@ -30,32 +41,30 @@ export default function App() {
   const [elapsed,      setElapsed]      = useState(0)
   const [waveData,     setWaveData]     = useState(null)
   const [predictions,  setPredictions]  = useState(null)
-  const [sourceValues, setSourceValues] = useState([0.5, 0.3, 0.2, 0.1])
-  const [status,       setStatus]       = useState({
-    title: 'Инициализация...', sub: 'Загрузка', level: 'warn'
-  })
+  const [sourceValues, setSourceValues] = useState([0.3, 0.2, 0.1, 0.05])
+  const [status,       setStatus]       = useState({ title: 'Инициализация...', sub: 'Загрузка', level: 'warn' })
+  const [history,      setHistory]      = useState([])
 
-  const wsRef    = useRef(null)
-  const clockRef = useRef(null)
+  const wsRef         = useRef(null)
+  const clockRef      = useRef(null)
+  const sessionPreds  = useRef([])   // копит предсказания за сессию
+  const sessionStart  = useRef(null)
 
-  // ── WebSocket → FastAPI backend ───────────────────────────────
-  useEffect(() => {
-    connectWS()
-    return () => wsRef.current?.close()
-  }, [])
+  // ── WebSocket ─────────────────────────────────────────────────
+  useEffect(() => { connectWS(); return () => wsRef.current?.close() }, [])
 
   function connectWS() {
     try {
       const ws = new WebSocket('ws://localhost:8000/ws')
       wsRef.current = ws
-
       ws.onopen    = () => setStatus({ title: 'Подключено', sub: 'Сервер запущен', level: 'ok' })
       ws.onmessage = (e) => {
         const msg = JSON.parse(e.data)
-        if (msg.type === 'waveform')    setWaveData(msg.data)
+        if (msg.type === 'waveform') setWaveData(msg.data)
         if (msg.type === 'prediction') {
           setPredictions(msg.data)
           setSourceValues(computeSources(msg.data))
+          sessionPreds.current.push(msg.data)
         }
         if (msg.type === 'status')
           setStatus({ title: msg.title, sub: msg.sub, level: msg.level })
@@ -64,33 +73,49 @@ export default function App() {
         setStatus({ title: 'Нет соединения', sub: 'Переподключение...', level: 'err' })
         setTimeout(connectWS, 3000)
       }
-      ws.onerror = () =>
-        setStatus({ title: 'Без сервера', sub: 'Только демо-режим', level: 'warn' })
+      ws.onerror = () => setStatus({ title: 'Без сервера', sub: 'Только демо-режим', level: 'warn' })
     } catch {
       setStatus({ title: 'Без сервера', sub: 'Только демо-режим', level: 'warn' })
     }
   }
 
-  // ── Таймер ────────────────────────────────────────────────────
+  // ── Таймер ───────────────────────────────────────────────────
   useEffect(() => {
-    if (recording) {
-      clockRef.current = setInterval(() => setElapsed(e => e + 1), 1000)
-    } else {
-      clearInterval(clockRef.current)
-    }
+    if (recording) clockRef.current = setInterval(() => setElapsed(e => e + 1), 1000)
+    else clearInterval(clockRef.current)
     return () => clearInterval(clockRef.current)
   }, [recording])
 
+  // ── Запись ───────────────────────────────────────────────────
   function handleToggleRecord() {
     const next = !recording
     setRecording(next)
-    if (!next) setElapsed(0)
+
+    if (next) {
+      // Старт сессии
+      sessionPreds.current = []
+      sessionStart.current = new Date()
+      setElapsed(0)
+      setStatus({ title: 'Запись идёт...', sub: 'Анализ в реальном времени', level: 'ok' })
+    } else {
+      // Стоп — сохраняем в историю
+      const preds = sessionPreds.current
+      if (preds.length > 0) {
+        const avg = avgPredictions(preds)
+        setHistory(h => [{
+          id:           Date.now(),
+          startedAt:    sessionStart.current,
+          duration:     elapsed,
+          predictions:  avg,
+          sourceValues: computeSources(avg),
+          timeline:     preds,          // полная серия для графика
+        }, ...h])
+      }
+      setStatus({ title: 'Остановлено', sub: 'Нажмите для новой записи', level: 'warn' })
+    }
+
     if (wsRef.current?.readyState === WebSocket.OPEN)
       wsRef.current.send(JSON.stringify({ type: next ? 'start' : 'stop' }))
-    setStatus(next
-      ? { title: 'Запись идёт...', sub: 'Анализ в реальном времени', level: 'ok' }
-      : { title: 'Остановлено',    sub: 'Нажмите для новой записи',   level: 'warn' }
-    )
   }
 
   function handleNav(id) {
@@ -121,12 +146,10 @@ export default function App() {
               />
             )}
             {page === 'history' && (
-              <div className="flex items-center justify-center h-full text-[#64748B] text-base">
-                История диагностик
-              </div>
+              <HistoryPage history={history} onClear={() => setHistory([])} />
             )}
+            {page === 'training' && <TrainingPage />}
           </main>
-
           {showSettings && <SettingsPanel />}
         </div>
 

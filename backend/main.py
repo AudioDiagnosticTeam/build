@@ -7,7 +7,8 @@ import uvicorn
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 
-from engine import DiagnosticEngine
+from engine  import DiagnosticEngine
+from trainer import Trainer
 
 app = FastAPI(title="AudioDiagnostic API", version="3.0")
 
@@ -152,6 +153,54 @@ async def _send(ws: WebSocket, data: dict):
         await ws.send_text(json.dumps(data, ensure_ascii=False))
     except Exception:
         pass
+
+
+@app.websocket("/ws/train")
+async def ws_train(ws: WebSocket):
+    await ws.accept()
+    loop    = asyncio.get_event_loop()
+    trainer = Trainer()
+    queue: asyncio.Queue = asyncio.Queue()
+
+    def on_msg(data: dict):
+        loop.call_soon_threadsafe(queue.put_nowait, data)
+
+    async def sender():
+        while True:
+            msg = await queue.get()
+            await _send(ws, msg)
+            if msg.get('type') in ('train_complete', 'train_error'):
+                # Перезагружаем модель после обучения
+                if msg.get('type') == 'train_complete':
+                    ok, info = engine.load_model()
+                    await _send(ws, {'type': 'train_log',
+                                     'text': f'Модель перезагружена: {info}'})
+                break
+
+    send_task = asyncio.create_task(sender())
+
+    try:
+        while True:
+            raw  = await ws.receive_text()
+            data = json.loads(raw)
+
+            if data['type'] == 'train_start':
+                trainer.start(
+                    dataset_path = data.get('dataset_path', ''),
+                    epochs       = int(data.get('epochs', 40)),
+                    batch_size   = int(data.get('batch_size', 32)),
+                    lr           = float(data.get('lr', 0.001)),
+                    augment      = bool(data.get('augment', True)),
+                    on_msg       = on_msg,
+                )
+
+            elif data['type'] == 'train_stop':
+                trainer.stop()
+
+    except WebSocketDisconnect:
+        trainer.stop()
+    finally:
+        send_task.cancel()
 
 
 if __name__ == "__main__":

@@ -1,47 +1,55 @@
 import { useState } from 'react'
-import { Eye, RotateCcw, Mic, MapPin } from 'lucide-react'
+import { RotateCcw, CheckCircle } from 'lucide-react'
 import CarView from './CarView'
 import Waveform from './Waveform'
-import ZoneOverlay, { ZONE_CONFIG } from './ZoneOverlay'
-
-// Какие классы неисправностей связаны с каждой зоной
-const ZONE_FAULTS = {
-  0: ['СТУК', 'СКРИП'],       // Двигатель
-  1: ['СВИСТ', 'ДРЕБЕЗГ'],    // Ремень / навесное
-  2: ['СВИСТ'],               // Впускная
-  3: ['ДРЕБЕЗГ', 'СКРИП'],    // Выхлоп
-}
 
 const SOURCES = [
-  { name: 'Двигатель',                      color: '#EF4444', dot: 'bg-[#EF4444]' },
-  { name: 'Ремень / Навесное оборудование', color: '#F59E0B', dot: 'bg-[#F59E0B]' },
-  { name: 'Впускная система',               color: '#60A5FA', dot: 'bg-[#60A5FA]' },
-  { name: 'Выхлопная система',              color: '#A855F7', dot: 'bg-[#A855F7]' },
+  { name: 'Двигатель',                      color: '#EF4444' },
+  { name: 'Ремень / Навесное оборудование', color: '#F59E0B' },
+  { name: 'Впускная система',               color: '#60A5FA' },
+  { name: 'Выхлопная система',              color: '#A855F7' },
 ]
 
 const DEFAULT_DIAGNOSES = [
-  { title: 'Возможная проблема в двигателе',       sub: 'Характерные звуки стука или детонации', sev: 'Высокая вероятность', color: '#EF4444' },
-  { title: 'Износ приводного ремня / ролика',      sub: 'Свист или скрежет при работе',          sev: 'Средняя вероятность', color: '#F59E0B' },
-  { title: 'Подсос воздуха во впускной системе',   sub: 'Шипение или свистящий звук',            sev: 'Низкая вероятность',  color: '#60A5FA' },
+  { title: 'Возможная проблема в двигателе',     sub: 'Характерные звуки стука или детонации', sev: 'Высокая вероятность', color: '#EF4444' },
+  { title: 'Износ приводного ремня / ролика',    sub: 'Свист или скрежет при работе',          sev: 'Средняя вероятность', color: '#F59E0B' },
+  { title: 'Подсос воздуха во впускной системе', sub: 'Шипение или свистящий звук',            sev: 'Низкая вероятность',  color: '#60A5FA' },
 ]
 
+const SUBTITLES = {
+  НОРМА:   'Оборудование работает штатно',
+  ДРЕБЕЗГ: 'Дребезжание деталей кузова или навесного оборудования',
+  СВИСТ:   'Свист ремня, турбины или впускной системы',
+  СКРИП:   'Скрип тормозов, подвески или шестерёнок',
+  СТУК:    'Стук двигателя, подшипников или карданного вала',
+}
+
+function isNormal(probs) {
+  return (probs?.['НОРМА'] ?? 0) > 0.60
+}
+
+function buildDiagnoses(probs) {
+  const sorted = Object.entries(probs).sort((a, b) => b[1] - a[1])
+  const top    = sorted.filter(([c]) => c !== 'НОРМА').slice(0, 3)
+
+  if (!top.length || isNormal(probs)) return null  // null = штатный режим
+
+  return top.map(([cls, prob]) => {
+    const color = prob > 0.65 ? '#EF4444' : prob > 0.40 ? '#F59E0B' : '#60A5FA'
+    const sev   = prob > 0.65 ? 'Высокая вероятность' : prob > 0.40 ? 'Средняя вероятность' : 'Низкая вероятность'
+    return { title: cls, sub: SUBTITLES[cls] ?? '', sev: `${sev} (${Math.round(prob * 100)}%)`, color }
+  })
+}
+
 export default function DiagnosticsPage({ waveData, predictions, sourceValues, elapsed }) {
-  const [micVol,      setMicVol]      = useState(70)
-  const [showOverlay, setShowOverlay] = useState(false)
-  const [selectedZone, setSelectedZone] = useState(null)   // null = все зоны
+  const [micVol, setMicVol] = useState(70)
 
-  const sources = SOURCES.map((s, i) => ({
-    ...s,
-    pct: Math.round((sourceValues?.[i] ?? 0) * 100),
-    active: selectedZone === null || selectedZone === i,
-  }))
-  const diagnoses = predictions
-    ? buildDiagnoses(predictions, selectedZone)
-    : DEFAULT_DIAGNOSES
+  const sources  = SOURCES.map((s, i) => ({ ...s, pct: Math.round((sourceValues?.[i] ?? 0) * 100) }))
+  const diagnoses = predictions ? buildDiagnoses(predictions) : DEFAULT_DIAGNOSES
+  const normal    = predictions ? isNormal(predictions) : false
+  const normaPct  = predictions ? Math.round((predictions['НОРМА'] ?? 0) * 100) : null
 
-  const selectedZoneInfo = selectedZone !== null ? ZONE_CONFIG[selectedZone] : null
-
-  const s = elapsed ?? 0
+  const s       = elapsed ?? 0
   const timeStr = `${String(Math.floor(s/3600)).padStart(2,'0')}:${String(Math.floor(s/60)%60).padStart(2,'0')}:${String(s%60).padStart(2,'0')}`
 
   return (
@@ -54,12 +62,23 @@ export default function DiagnosticsPage({ waveData, predictions, sourceValues, e
         <div className="w-[210px] shrink-0 bg-[#111827] rounded-xl border border-[#1E2D45] p-3.5 flex flex-col">
           <div className="flex items-center gap-1.5 mb-3">
             <span className="text-[13px] font-semibold text-[#E2E8F0]">Источник звуков</span>
-            <span className="text-[#64748B] text-[11px] cursor-help" title="Вероятность источника звука">ⓘ</span>
+            <span className="text-[#64748B] text-[11px] cursor-help" title="Предполагаемый источник на основе анализа">ⓘ</span>
           </div>
 
+          {/* Норма — общий статус */}
+          {normal && (
+            <div className="mb-3 flex items-center gap-2 bg-[#22C55E]/10 border border-[#22C55E]/30 rounded-lg px-3 py-2">
+              <CheckCircle size={14} className="text-[#22C55E] shrink-0" />
+              <div>
+                <p className="text-[11px] font-semibold text-[#22C55E]">Штатная работа</p>
+                <p className="text-[10px] text-[#64748B]">Отклонений не выявлено</p>
+              </div>
+            </div>
+          )}
+
           <div className="flex flex-col gap-0.5 flex-1">
-            {sources.map(({ name, color, pct, active }) => (
-              <div key={name} className={`py-1.5 transition-opacity duration-300 ${active ? 'opacity-100' : 'opacity-30'}`}>
+            {sources.map(({ name, color, pct }) => (
+              <div key={name} className="py-1.5">
                 <div className="flex items-center gap-2 mb-1.5">
                   <span className="w-2.5 h-2.5 rounded-full shrink-0" style={{ background: color }} />
                   <span className="text-[11px] text-[#E2E8F0] flex-1 leading-tight">{name}</span>
@@ -72,56 +91,32 @@ export default function DiagnosticsPage({ waveData, predictions, sourceValues, e
               </div>
             ))}
           </div>
-
-          <button
-            onClick={() => setShowOverlay(true)}
-            className="mt-3 flex items-center justify-center gap-2 text-[11px] text-[#3B82F6] bg-[#1A2235] border border-[#1E2D45] hover:bg-[#3B82F6]/10 rounded-lg py-2 transition-colors"
-          >
-            <MapPin size={13} />
-            {selectedZone !== null ? `Зона: ${ZONE_CONFIG[selectedZone].label}` : 'Указать зону микрофона'}
-          </button>
         </div>
 
         {/* Car visualization */}
         <div className="flex-1 bg-[#111827] rounded-xl border border-[#1E2D45] flex flex-col overflow-hidden">
           <div className="flex justify-end gap-1.5 p-2 shrink-0">
-            {[['🚗','Вид сбоку'],['3D','3D вид'],<RotateCcw key="r" size={14} />].map((item, i) => (
-              <button key={i} title={Array.isArray(item) ? item[1] : ''}
+            {[['🚗','Вид сбоку'],['3D','3D вид']].map(([icon, tip]) => (
+              <button key={tip} title={tip}
                 className="w-8 h-7 flex items-center justify-center bg-[#1A2235] border border-[#1E2D45] rounded-md text-[11px] text-[#E2E8F0] hover:bg-[#1E2D45] transition-colors">
-                {Array.isArray(item) ? item[0] : item}
+                {icon}
               </button>
             ))}
+            <button title="Сброс" className="w-8 h-7 flex items-center justify-center bg-[#1A2235] border border-[#1E2D45] rounded-md text-[#E2E8F0] hover:bg-[#1E2D45] transition-colors">
+              <RotateCcw size={13} />
+            </button>
           </div>
+
           <div className="flex-1 relative overflow-hidden px-2 pb-2">
-            {/* Машина — кликабельна для открытия оверлея */}
-            <div
-              className="w-full h-full cursor-pointer"
-              onClick={() => setShowOverlay(true)}
-            >
-              <CarView
-                zones={sourceValues ?? [0.5,0.3,0.2,0.1]}
-                selectedZone={selectedZone}
-              />
-            </div>
+            <CarView zones={sourceValues ?? [0.3, 0.2, 0.1, 0.05]} />
 
-            {/* Оверлей выбора зоны */}
-            {showOverlay && (
-              <ZoneOverlay
-                selected={selectedZone}
-                onSelect={(id) => {
-                  setSelectedZone(id === selectedZone ? null : id)
-                }}
-                onClose={() => setShowOverlay(false)}
-              />
-            )}
-
-            {/* Бейдж выбранной зоны */}
-            {selectedZoneInfo && !showOverlay && (
-              <div className="absolute top-3 left-3 flex items-center gap-1.5 px-2.5 py-1 rounded-full border"
-                   style={{ background: `${selectedZoneInfo.color}20`, borderColor: selectedZoneInfo.color }}>
-                <Mic size={10} style={{ color: selectedZoneInfo.color }} />
-                <span className="text-[10px] font-medium" style={{ color: selectedZoneInfo.color }}>
-                  {selectedZoneInfo.label}
+            {/* Штатная работа — оверлей на машине */}
+            {normal && (
+              <div className="absolute top-3 left-1/2 -translate-x-1/2 flex items-center gap-2
+                px-3 py-1.5 bg-[#0C1120]/80 backdrop-blur border border-[#22C55E]/40 rounded-full">
+                <CheckCircle size={12} className="text-[#22C55E]" />
+                <span className="text-[11px] text-[#22C55E] font-medium">
+                  Работает штатно · {normaPct}%
                 </span>
               </div>
             )}
@@ -135,9 +130,9 @@ export default function DiagnosticsPage({ waveData, predictions, sourceValues, e
       </div>
 
       {/* ── Bottom row ───────────────────────────────────────── */}
-      <div className="flex gap-2.5 shrink-0" style={{ height: '220px' }}>
+      <div className="flex gap-2.5 shrink-0" style={{ height: '210px' }}>
 
-        {/* Waveform card */}
+        {/* Waveform */}
         <div className="w-[250px] shrink-0 bg-[#111827] rounded-xl border border-[#1E2D45] p-3 flex flex-col">
           <div className="flex items-center justify-between mb-1.5 shrink-0">
             <span className="text-[12px] font-medium text-[#E2E8F0]">Запись звука</span>
@@ -158,57 +153,44 @@ export default function DiagnosticsPage({ waveData, predictions, sourceValues, e
           </div>
         </div>
 
-        {/* Analysis card */}
+        {/* Analysis */}
         <div className="flex-1 bg-[#111827] rounded-xl border border-[#1E2D45] p-3.5 flex flex-col">
-          <span className="text-[13px] font-semibold text-[#E2E8F0] mb-2.5 shrink-0">Предварительный анализ</span>
-          <div className="flex flex-col gap-2 flex-1">
-            {diagnoses.map((d, i) => (
-              <div key={i} className="flex items-center gap-3 bg-[#1A2235] rounded-lg px-3.5 py-2.5">
-                <span className="w-2.5 h-2.5 rounded-full shrink-0 mt-0.5" style={{ background: d.color }} />
-                <div className="flex-1 min-w-0">
-                  <p className="text-[12px] font-medium text-[#E2E8F0] leading-tight">{d.title}</p>
-                  <p className="text-[11px] text-[#64748B] leading-tight mt-0.5">{d.sub}</p>
-                </div>
-                <span className="text-[11px] font-medium shrink-0 text-right" style={{ color: d.color }}>
-                  {d.sev}
-                </span>
+          <span className="text-[13px] font-semibold text-[#E2E8F0] mb-2.5 shrink-0">
+            Предварительный анализ
+          </span>
+
+          {/* Норма */}
+          {normal && (
+            <div className="flex-1 flex flex-col items-center justify-center gap-2">
+              <div className="w-12 h-12 rounded-full bg-[#22C55E]/15 border border-[#22C55E]/30 flex items-center justify-center">
+                <CheckCircle size={22} className="text-[#22C55E]" />
               </div>
-            ))}
-          </div>
+              <p className="text-[13px] font-semibold text-[#22C55E]">Неисправностей не обнаружено</p>
+              <p className="text-[11px] text-[#64748B] text-center">
+                Звуковой профиль соответствует штатной работе агрегатов
+              </p>
+            </div>
+          )}
+
+          {/* Неисправности */}
+          {!normal && (
+            <div className="flex flex-col gap-2 flex-1">
+              {(diagnoses ?? DEFAULT_DIAGNOSES).map((d, i) => (
+                <div key={i} className="flex items-center gap-3 bg-[#1A2235] rounded-lg px-3.5 py-2.5">
+                  <span className="w-2.5 h-2.5 rounded-full shrink-0 mt-0.5" style={{ background: d.color }} />
+                  <div className="flex-1 min-w-0">
+                    <p className="text-[12px] font-medium text-[#E2E8F0] leading-tight">{d.title}</p>
+                    <p className="text-[11px] text-[#64748B] leading-tight mt-0.5">{d.sub}</p>
+                  </div>
+                  <span className="text-[11px] font-medium shrink-0 text-right" style={{ color: d.color }}>
+                    {d.sev}
+                  </span>
+                </div>
+              ))}
+            </div>
+          )}
         </div>
       </div>
     </div>
   )
-}
-
-const SUBTITLES = {
-  НОРМА:   'Оборудование работает штатно',
-  ДРЕБЕЗГ: 'Дребезжание деталей кузова или навесного оборудования',
-  СВИСТ:   'Свист ремня, турбины или впускной системы',
-  СКРИП:   'Скрип тормозов, подвески или шестерёнок',
-  СТУК:    'Стук двигателя, подшипников или карданного вала',
-}
-
-function buildDiagnoses(probs, selectedZone = null) {
-  const sorted = Object.entries(probs).sort((a, b) => b[1] - a[1])
-
-  // Если выбрана зона — буст вероятностей связанных классов
-  let weighted = sorted
-  if (selectedZone !== null) {
-    const zoneFaults = ZONE_FAULTS[selectedZone] ?? []
-    weighted = sorted.map(([cls, prob]) => [
-      cls,
-      zoneFaults.includes(cls) ? Math.min(1, prob * 1.4) : prob * 0.7,
-    ]).sort((a, b) => b[1] - a[1])
-  }
-
-  const top = weighted.filter(([c]) => c !== 'НОРМА').slice(0, 3)
-  if (!top.length || (probs['НОРМА'] ?? 0) > 0.75)
-    return [{ title: 'НОРМА', sub: SUBTITLES['НОРМА'], sev: `${Math.round((probs['НОРМА']??1)*100)}%`, color: '#22C55E' }]
-
-  return top.map(([cls, prob]) => {
-    const color = prob > 0.65 ? '#EF4444' : prob > 0.40 ? '#F59E0B' : '#60A5FA'
-    const sev   = prob > 0.65 ? 'Высокая вероятность' : prob > 0.40 ? 'Средняя вероятность' : 'Низкая вероятность'
-    return { title: cls, sub: SUBTITLES[cls] ?? '', sev: `${sev} (${Math.round(prob*100)}%)`, color }
-  })
 }

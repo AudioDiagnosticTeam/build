@@ -1,9 +1,10 @@
 import { useState } from 'react'
-import { Activity, ClipboardList, Info, X } from 'lucide-react'
+import { Activity, ClipboardList, Brain, Info, X } from 'lucide-react'
 
 const NAV = [
-  { icon: Activity,      label: 'Диагностика', id: 'diag' },
-  { icon: ClipboardList, label: 'История',     id: 'history' },
+  { icon: Activity,      label: 'Диагностика', id: 'diag'     },
+  { icon: ClipboardList, label: 'История',     id: 'history'  },
+  { icon: Brain,         label: 'Обучение',    id: 'training' },
 ]
 
 function AboutOverlay({ onClose }) {
