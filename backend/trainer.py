@@ -130,7 +130,7 @@ class Trainer:
 
             criterion = nn.CrossEntropyLoss()
             optimizer = optim.Adam(model.parameters(), lr=lr)
-            scheduler = optim.lr_scheduler.ReduceLROnPlateau(optimizer, patience=5, factor=0.5, verbose=False)
+            scheduler = optim.lr_scheduler.ReduceLROnPlateau(optimizer, patience=5, factor=0.5)
 
             on_msg({'type': 'train_started', 'epochs': epochs, 'classes': classes,
                     'samples': len(X), 'device': str(device)})
