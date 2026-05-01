@@ -1,13 +1,15 @@
 import { useState, useEffect, useRef } from 'react'
-import { Play, Square, Brain, CheckCircle, AlertTriangle, RefreshCw, Download, ExternalLink, FolderOpen } from 'lucide-react'
+import { Play, Square, Brain, CheckCircle, AlertTriangle, RefreshCw, Download, ExternalLink, Database, FileAudio } from 'lucide-react'
+import { useLang } from '../i18n'
 
 // ── SVG line chart ────────────────────────────────────────────────────────────
 function LineChart({ series, height = 90 }) {
   const W = 480, H = height, P = 6
   const iW = W - P * 2, iH = H - P * 2
 
+  const t = useLang()
   if (!series?.length || !series[0]?.data?.length)
-    return <div className="flex items-center justify-center text-[#475569] text-[11px]" style={{ height }}>Нет данных</div>
+    return <div className="flex items-center justify-center text-[#475569] text-[11px]" style={{ height }}>{t('train.log')}</div>
 
   const n    = series[0].data.length
   const all  = series.flatMap(s => s.data)
@@ -36,12 +38,13 @@ function LineChart({ series, height = 90 }) {
 
 // ── Train log ─────────────────────────────────────────────────────────────────
 function TrainLog({ logs }) {
+  const t = useLang()
   const ref = useRef(null)
   useEffect(() => { ref.current?.scrollTo({ top: 99999, behavior: 'smooth' }) }, [logs])
   return (
     <div ref={ref} className="bg-[#080E1A] rounded-lg p-3 h-32 overflow-y-auto font-mono text-[10px] leading-relaxed">
       {!logs.length
-        ? <span className="text-[#475569]">Лог пуст</span>
+        ? <span className="text-[#475569]">{t('train.log')}…</span>
         : logs.map((l, i) => (
           <div key={i} className={
             l.type === 'error'   ? 'text-[#EF4444]' :
@@ -57,8 +60,15 @@ function TrainLog({ logs }) {
 }
 
 // ── Main ──────────────────────────────────────────────────────────────────────
+function loadZeroWeights() {
+  try { return new Set(JSON.parse(localStorage.getItem('zeroWeightClasses') || '[]')) }
+  catch { return new Set() }
+}
+
 export default function TrainingPage() {
-  const [datasetPath, setDatasetPath] = useState(String.raw`C:\Users\Mi\Desktop\itog`)
+  const t = useLang()
+  const [datasetInfo,   setDatasetInfo]   = useState(null)
+  const [zeroWeights,   setZeroWeights]   = useState(loadZeroWeights)
   const [epochs,    setEpochs]    = useState(40)
   const [batchSize, setBatchSize] = useState(32)
   const [lr,        setLr]        = useState(0.001)
@@ -84,6 +94,22 @@ export default function TrainingPage() {
 
   const wsRef = useRef(null)
 
+  useEffect(() => {
+    fetch('http://localhost:8000/dataset')
+      .then(r => r.json())
+      .then(d => setDatasetInfo(d.classes ?? {}))
+      .catch(() => {})
+  }, [])
+
+  function toggleZeroWeight(cls) {
+    setZeroWeights(prev => {
+      const next = new Set(prev)
+      next.has(cls) ? next.delete(cls) : next.add(cls)
+      localStorage.setItem('zeroWeightClasses', JSON.stringify([...next]))
+      return next
+    })
+  }
+
   function addLog(text, type = 'info') {
     const time = new Date().toLocaleTimeString('ru', { hour:'2-digit', minute:'2-digit', second:'2-digit' })
     setLogs(l => [...l, { text, type, time }])
@@ -102,9 +128,9 @@ export default function TrainingPage() {
     if (msg.type === 'hf_done')  {
       setHfStatus('done')
       setHfMsg(`Готово! ${msg.audio} аудио-файлов скачано`)
-      setDatasetPath(msg.local_path)
       setHfDone(msg.total); setHfTotal(msg.total)
       addLog(`✓ Датасет сохранён: ${msg.local_path}`, 'success')
+      fetch('http://localhost:8000/dataset').then(r => r.json()).then(d => setDatasetInfo(d.classes ?? {})).catch(() => {})
     }
     if (msg.type === 'hf_error') { setHfStatus('error'); setHfMsg(msg.text); addLog(`Ошибка: ${msg.text}`, 'error') }
     // Training
@@ -150,7 +176,7 @@ export default function TrainingPage() {
     setTraining(true); setPhase('loading'); setLogs([])
     openWS(ws => {
       addLog('Подключено, запускаю обучение...')
-      ws.send(JSON.stringify({ type: 'train_start', dataset_path: datasetPath, epochs, batch_size: batchSize, lr, augment }))
+      ws.send(JSON.stringify({ type: 'train_start', epochs, batch_size: batchSize, lr, augment }))
     })
   }
 
@@ -172,8 +198,8 @@ export default function TrainingPage() {
           <Brain size={18} className="text-[#3B82F6]" />
         </div>
         <div>
-          <h2 className="text-[15px] font-bold text-[#E2E8F0]">Обучение модели</h2>
-          <p className="text-[11px] text-[#64748B]">CNN · MFCC · обучение с нуля на вашем датасете</p>
+          <h2 className="text-[15px] font-bold text-[#E2E8F0]">{t('train.title')}</h2>
+          <p className="text-[11px] text-[#64748B]">{t('train.subtitle')}</p>
         </div>
       </div>
 
@@ -181,14 +207,14 @@ export default function TrainingPage() {
       <div className="bg-[#111827] border border-[#1E2D45] rounded-xl p-4 flex flex-col gap-3">
         <div className="flex items-center justify-between">
           <div className="flex items-center gap-2">
-            <span className="text-[12px] font-semibold text-[#E2E8F0]">Датасет с HuggingFace</span>
+            <span className="text-[12px] font-semibold text-[#E2E8F0]">{t('train.hf_dataset')}</span>
             <a href={`https://huggingface.co/datasets/${hfRepo}`} target="_blank" rel="noreferrer"
                className="text-[#64748B] hover:text-[#3B82F6] transition-colors">
               <ExternalLink size={12} />
             </a>
           </div>
-          {hfStatus === 'done' && <span className="text-[10px] text-[#22C55E] flex items-center gap-1"><CheckCircle size={11}/>Скачан</span>}
-          {hfStatus === 'error' && <span className="text-[10px] text-[#EF4444]">Ошибка</span>}
+          {hfStatus === 'done' && <span className="text-[10px] text-[#22C55E] flex items-center gap-1"><CheckCircle size={11}/>{t('train.downloaded')}</span>}
+          {hfStatus === 'error' && <span className="text-[10px] text-[#EF4444]">{t('train.error')}</span>}
         </div>
 
         <div className="flex gap-2">
@@ -198,8 +224,8 @@ export default function TrainingPage() {
           <button onClick={handleDownloadHF} disabled={hfStatus === 'loading'}
             className="flex items-center gap-2 px-4 py-2 bg-[#1A2235] border border-[#3B82F6]/50 text-[#3B82F6] rounded-lg text-[11px] font-semibold hover:bg-[#3B82F6]/10 disabled:opacity-50 transition-colors whitespace-nowrap">
             {hfStatus === 'loading'
-              ? <><RefreshCw size={12} className="animate-spin" /> Скачивание...</>
-              : <><Download size={12} /> Скачать датасет</>
+              ? <><RefreshCw size={12} className="animate-spin" /> {t('train.downloading')}</>
+              : <><Download size={12} /> {t('train.download')}</>
             }
           </button>
         </div>
@@ -213,8 +239,8 @@ export default function TrainingPage() {
         {hfStatus === 'loading' && hfTotal > 0 && (
           <div>
             <div className="flex justify-between text-[10px] text-[#64748B] mb-1">
-              <span>Прогресс</span>
-              <span>{hfDone} / {hfTotal} файлов</span>
+              <span>{t('train.progress')}</span>
+              <span>{hfDone} / {hfTotal}</span>
             </div>
             <div className="h-1.5 bg-[#1A2235] rounded-full overflow-hidden">
               <div className="h-full bg-[#3B82F6] rounded-full transition-all duration-200"
@@ -226,36 +252,63 @@ export default function TrainingPage() {
 
       {/* Параметры */}
       <div className="bg-[#111827] border border-[#1E2D45] rounded-xl p-4 flex flex-col gap-3">
-        <p className="text-[12px] font-semibold text-[#E2E8F0]">Параметры обучения</p>
+        <p className="text-[12px] font-semibold text-[#E2E8F0]">{t('train.params')}</p>
 
-        <div>
-          <label className="text-[11px] text-[#64748B] block mb-1">Путь к датасету</label>
-          <div className="flex gap-2">
-            <input value={datasetPath} onChange={e => setDatasetPath(e.target.value)} disabled={training}
-              className="flex-1 bg-[#1A2235] border border-[#1E2D45] rounded-lg px-3 py-2 text-[12px] text-[#E2E8F0] outline-none focus:border-[#3B82F6] disabled:opacity-50 font-mono"
-              placeholder="C:\path\to\dataset" />
+        {/* Dataset summary */}
+        <div className="bg-[#0C1120] border border-[#1E2D45] rounded-lg p-3">
+          <div className="flex items-center gap-2 mb-2">
+            <Database size={12} className="text-[#64748B]" />
+            <span className="text-[11px] text-[#64748B]">Датасет из раздела «Датасет»</span>
             <button
-              onClick={async () => {
-                try {
-                  const res = await fetch('http://localhost:8000/dialog/folder')
-                  const { path } = await res.json()
-                  if (path) setDatasetPath(path)
-                } catch { /* backend недоступен */ }
-              }}
-              disabled={training}
-              title="Выбрать папку"
-              className="w-10 h-[38px] flex items-center justify-center bg-[#1A2235] border border-[#1E2D45] rounded-lg text-[#64748B] hover:text-[#3B82F6] hover:border-[#3B82F6] disabled:opacity-50 transition-colors shrink-0"
+              onClick={() => fetch('http://localhost:8000/dataset').then(r => r.json()).then(d => setDatasetInfo(d.classes ?? {})).catch(() => {})}
+              className="ml-auto text-[#475569] hover:text-[#E2E8F0] transition-colors"
+              title="Обновить"
             >
-              <FolderOpen size={16} />
+              <RefreshCw size={11} />
             </button>
           </div>
-          <p className="text-[10px] text-[#475569] mt-1">Папки внутри = классы (НОРМА, СТУК, СВИСТ ...). Поддерживаются .wav и .mp3</p>
+          {datasetInfo === null ? (
+            <p className="text-[11px] text-[#475569]">Загрузка...</p>
+          ) : Object.keys(datasetInfo).length === 0 ? (
+            <p className="text-[11px] text-[#EF4444]">Датасет пуст — добавьте файлы в разделе «Датасет»</p>
+          ) : (
+            <>
+              <div className="flex flex-wrap gap-1.5">
+                {Object.entries(datasetInfo).map(([cls, info]) => {
+                  const isZero = zeroWeights.has(cls)
+                  return (
+                    <button
+                      key={cls}
+                      onClick={() => toggleZeroWeight(cls)}
+                      title={isZero ? 'Нулевой вес — нажмите чтобы снять' : 'Нажмите чтобы назначить нулевой вес'}
+                      className="flex items-center gap-1.5 rounded-md px-2 py-1 border transition-all"
+                      style={isZero
+                        ? { background: '#1A2235', borderColor: '#374151', opacity: 0.5 }
+                        : { background: '#1A2235', borderColor: '#1E2D45' }}
+                    >
+                      {isZero && <span className="text-[9px] font-bold text-[#64748B]">0×</span>}
+                      <span className={`text-[11px] font-semibold ${isZero ? 'line-through text-[#64748B]' : 'text-[#E2E8F0]'}`}>{cls}</span>
+                      <span className="flex items-center gap-0.5 text-[10px] text-[#64748B]">
+                        <FileAudio size={9} />
+                        {info.count}
+                      </span>
+                    </button>
+                  )
+                })}
+              </div>
+              {zeroWeights.size > 0 && (
+                <p className="text-[10px] text-[#475569] mt-1">
+                  Классы с 0× не влияют на индикаторы неисправностей в диагностике
+                </p>
+              )}
+            </>
+          )}
         </div>
 
         <div className="grid grid-cols-3 gap-3">
           {[
-            { label: 'Эпохи', val: epochs, set: setEpochs, min: 5, max: 200, step: 5 },
-            { label: 'Батч',  val: batchSize, set: setBatchSize, min: 8, max: 128, step: 8 },
+            { label: t('train.epochs'), val: epochs, set: setEpochs, min: 5, max: 200, step: 5 },
+            { label: t('train.batch'),  val: batchSize, set: setBatchSize, min: 8, max: 128, step: 8 },
           ].map(({ label, val, set, min, max, step }) => (
             <div key={label}>
               <label className="text-[11px] text-[#64748B] block mb-1">{label}</label>
@@ -278,8 +331,8 @@ export default function TrainingPage() {
 
         <div className="flex items-center justify-between">
           <div>
-            <p className="text-[11px] text-[#E2E8F0]">Аугментация данных</p>
-            <p className="text-[10px] text-[#475569]">×3 копии с шумом, сдвигом, громкостью</p>
+            <p className="text-[11px] text-[#E2E8F0]">{t('train.aug')}</p>
+            <p className="text-[10px] text-[#475569]">{t('train.aug_hint')}</p>
           </div>
           <button onClick={() => setAugment(a => !a)} disabled={training}
             className={`w-11 h-6 rounded-full relative transition-colors disabled:opacity-50 ${augment ? 'bg-[#3B82F6]' : 'bg-[#1E2D45]'}`}>
@@ -292,8 +345,8 @@ export default function TrainingPage() {
             training ? 'bg-[#EF4444] hover:bg-[#DC2626]' : 'bg-[#3B82F6] hover:bg-[#2563EB]'
           }`}>
           {training
-            ? <><Square size={14} fill="white" /> Остановить обучение</>
-            : <><Play   size={14} fill="white" /> Начать обучение</>}
+            ? <><Square size={14} fill="white" /> {t('train.stop')}</>
+            : <><Play   size={14} fill="white" /> {t('train.start')}</>}
         </button>
       </div>
 
@@ -306,11 +359,11 @@ export default function TrainingPage() {
             {(phase === 'running' || phase === 'loading') && <RefreshCw size={15} className="text-[#3B82F6] animate-spin" />}
             <span className={`text-[12px] font-semibold ${phase === 'done' ? 'text-[#22C55E]' : phase === 'error' ? 'text-[#EF4444]' : 'text-[#E2E8F0]'}`}>
               {phase === 'loading' && (loadProg.total > 0
-                ? `Загрузка MFCC: ${loadProg.done} / ${loadProg.total} файлов`
-                : 'Загрузка датасета...')}
-              {phase === 'running' && `Эпоха ${progress.epoch} / ${progress.total} · Лучшая ${(progress.best_acc*100).toFixed(1)}%`}
-              {phase === 'done'    && `Готово · Лучшая точность ${(progress.best_acc*100).toFixed(1)}%`}
-              {phase === 'error'   && 'Ошибка обучения'}
+                ? `MFCC: ${loadProg.done} / ${loadProg.total}`
+                : `${t('train.params')}...`)}
+              {phase === 'running' && `Epoch ${progress.epoch} / ${progress.total} · Best ${(progress.best_acc*100).toFixed(1)}%`}
+              {phase === 'done'    && `✓ Best ${(progress.best_acc*100).toFixed(1)}%`}
+              {phase === 'error'   && t('train.error')}
             </span>
           </div>
 
@@ -318,7 +371,7 @@ export default function TrainingPage() {
           {phase === 'loading' && loadProg.total > 0 && (
             <div>
               <div className="flex justify-between text-[10px] text-[#64748B] mb-1">
-                <span>Извлечение MFCC признаков</span>
+                <span>MFCC</span>
                 <span>{Math.round(loadProg.done / loadProg.total * 100)}%</span>
               </div>
               <div className="h-1.5 bg-[#1A2235] rounded-full overflow-hidden">
@@ -338,7 +391,7 @@ export default function TrainingPage() {
           {trainAcc.length > 1 && (
             <div className="grid grid-cols-2 gap-4">
               <div>
-                <p className="text-[11px] text-[#64748B] mb-1">Accuracy</p>
+                <p className="text-[11px] text-[#64748B] mb-1">{t('train.accuracy')}</p>
                 <LineChart height={85} series={[
                   { data: trainAcc, color: '#3B82F6' },
                   { data: testAcc,  color: '#22C55E' },
@@ -353,7 +406,7 @@ export default function TrainingPage() {
                 </div>
               </div>
               <div>
-                <p className="text-[11px] text-[#64748B] mb-1">Loss</p>
+                <p className="text-[11px] text-[#64748B] mb-1">{t('train.loss')}</p>
                 <LineChart height={85} series={[
                   { data: trainLoss, color: '#F59E0B' },
                   { data: testLoss,  color: '#EF4444' },
@@ -371,7 +424,7 @@ export default function TrainingPage() {
           )}
 
           <div>
-            <p className="text-[11px] text-[#64748B] mb-1">Лог</p>
+            <p className="text-[11px] text-[#64748B] mb-1">{t('train.log')}</p>
             <TrainLog logs={logs} />
           </div>
         </div>

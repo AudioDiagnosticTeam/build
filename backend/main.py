@@ -77,6 +77,22 @@ def save_hf_config(repo: str = Form(...), token: str = Form(...)):
 
 # ─── Dataset API ──────────────────────────────────────────────────────────────
 
+def _file_info(path: Path) -> dict:
+    import wave
+    size = path.stat().st_size
+    duration = None
+    try:
+        if path.suffix.lower() == '.wav':
+            with wave.open(str(path)) as w:
+                duration = round(w.getnframes() / w.getframerate(), 1)
+        else:
+            import soundfile as sf
+            duration = round(sf.info(str(path)).duration, 1)
+    except Exception:
+        pass
+    return {"name": path.name, "size": size, "duration": duration}
+
+
 @app.get("/dataset")
 def get_dataset():
     if not DATASET_PATH.exists():
@@ -84,12 +100,62 @@ def get_dataset():
     result = {}
     for cls_dir in sorted(DATASET_PATH.iterdir()):
         if cls_dir.is_dir() and cls_dir.name not in EXCLUDED_DIRS and not cls_dir.name.startswith('.'):
-            files = sorted([
-                f.name for f in cls_dir.iterdir()
+            audio = sorted(
+                f for f in cls_dir.iterdir()
                 if f.is_file() and f.suffix.lower() in {'.wav', '.mp3'}
-            ])
+            )
+            files = [_file_info(f) for f in audio]
             result[cls_dir.name] = {"count": len(files), "files": files}
     return {"classes": result}
+
+
+@app.get("/dataset/audio/{cls}/{filename}")
+def serve_audio(cls: str, filename: str):
+    from fastapi.responses import FileResponse
+    path = DATASET_PATH / cls / filename
+    if not path.exists():
+        return JSONResponse({"error": "not found"}, status_code=404)
+    return FileResponse(str(path), media_type="audio/wav")
+
+
+@app.get("/dataset/spectrogram/{cls}/{filename}")
+def get_spectrogram(cls: str, filename: str):
+    import io
+    import numpy as np
+    import librosa
+    import librosa.display
+    import matplotlib
+    matplotlib.use('Agg')
+    import matplotlib.pyplot as plt
+    from fastapi.responses import StreamingResponse
+
+    path = DATASET_PATH / cls / filename
+    if not path.exists():
+        return JSONResponse({"error": "not found"}, status_code=404)
+
+    y, sr = librosa.load(str(path), sr=22050)
+    S    = librosa.feature.melspectrogram(y=y, sr=sr, n_mels=128, fmax=8000)
+    S_db = librosa.power_to_db(S, ref=np.max)
+
+    fig, ax = plt.subplots(figsize=(9, 2.8))
+    fig.patch.set_facecolor('#0C1120')
+    ax.set_facecolor('#111827')
+    img = librosa.display.specshow(S_db, sr=sr, x_axis='time', y_axis='mel',
+                                   ax=ax, cmap='magma', fmax=8000)
+    cbar = plt.colorbar(img, ax=ax, format='%+2.0f dB')
+    cbar.ax.yaxis.set_tick_params(color='#64748B', labelcolor='#64748B')
+    ax.tick_params(colors='#64748B', labelsize=7)
+    ax.set_xlabel('Время (сек)', color='#64748B', fontsize=8)
+    ax.set_ylabel('Частота', color='#64748B', fontsize=8)
+    for spine in ax.spines.values():
+        spine.set_color('#1E2D45')
+    plt.tight_layout(pad=0.5)
+
+    buf = io.BytesIO()
+    plt.savefig(buf, format='png', dpi=110, bbox_inches='tight', facecolor='#0C1120')
+    plt.close(fig)
+    buf.seek(0)
+    return StreamingResponse(buf, media_type="image/png")
 
 
 @app.post("/dataset/class/{name}")
@@ -176,6 +242,22 @@ async def cut_audio(
         tmp_path.unlink(missing_ok=True)
 
 
+@app.get("/audio/devices")
+def get_audio_devices():
+    import sounddevice as sd
+    devices = sd.query_devices()
+    inputs = [
+        {"id": i, "name": d["name"], "channels": int(d["max_input_channels"])}
+        for i, d in enumerate(devices)
+        if d["max_input_channels"] > 0
+    ]
+    try:
+        default_in = sd.default.device[0]
+    except Exception:
+        default_in = None
+    return {"devices": inputs, "default": default_in}
+
+
 # ──────────────────────────────────────────────────────────────────────────────
 
 @app.websocket("/ws")
@@ -240,16 +322,19 @@ async def ws_endpoint(ws: WebSocket):
                 recording = True
                 import sounddevice as sd
 
-                chunk_size = int(engine.SR * 0.05)     # 50 мс
+                chunk_size  = int(engine.SR * 0.05)     # 50 мс
+                device_id   = data.get("device", None)  # None = default
+                gain        = float(data.get("gain", 1.0))
 
                 def audio_callback(indata, frames, time_info, status):
-                    chunk = indata[:, 0].copy()
+                    chunk = (indata[:, 0] * gain).copy()
                     try:
                         loop.call_soon_threadsafe(audio_queue.put_nowait, chunk)
                     except asyncio.QueueFull:
                         pass
 
                 stream = sd.InputStream(
+                    device=device_id,
                     samplerate=engine.SR,
                     channels=1,
                     dtype="float32",
@@ -366,7 +451,7 @@ async def ws_train(ws: WebSocket):
 
             elif data['type'] == 'train_start':
                 trainer.start(
-                    dataset_path = data.get('dataset_path', ''),
+                    dataset_path = data.get('dataset_path') or str(DATASET_PATH),
                     epochs       = int(data.get('epochs', 40)),
                     batch_size   = int(data.get('batch_size', 32)),
                     lr           = float(data.get('lr', 0.001)),

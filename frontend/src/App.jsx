@@ -1,5 +1,6 @@
 import { useState, useEffect, useRef } from 'react'
 import './index.css'
+import { LangProvider } from './i18n'
 import Sidebar         from './components/Sidebar'
 import Header          from './components/Header'
 import Footer          from './components/Footer'
@@ -17,10 +18,16 @@ const FAULT_WEIGHTS = {
   СТУК:    [0.90, 0.20, 0.05, 0.10],
 }
 
+function getZeroWeightClasses() {
+  try { return new Set(JSON.parse(localStorage.getItem('zeroWeightClasses') || '[]')) }
+  catch { return new Set() }
+}
+
 function computeSources(probs) {
+  const zeros = getZeroWeightClasses()
   const vals = [0, 0, 0, 0]
   for (const [cls, p] of Object.entries(probs)) {
-    const w = FAULT_WEIGHTS[cls] ?? [0, 0, 0, 0]
+    const w = zeros.has(cls) ? [0, 0, 0, 0] : (FAULT_WEIGHTS[cls] ?? [0, 0, 0, 0])
     w.forEach((wi, i) => { vals[i] += p * wi })
   }
   return vals.map(v => Math.min(1, v))
@@ -46,11 +53,14 @@ export default function App() {
   const [status,       setStatus]       = useState({ title: 'Инициализация...', sub: 'Загрузка', level: 'warn' })
   const [history,      setHistory]      = useState([])
   const [dots,         setDots]         = useState(true)
+  const [audioDevice,  setAudioDevice]  = useState(null)   // sounddevice index
+  const [micGain,      setMicGain]      = useState(70)     // 0-100 → gain 0-2
 
   const wsRef         = useRef(null)
   const clockRef      = useRef(null)
-  const sessionPreds  = useRef([])   // копит предсказания за сессию
+  const sessionPreds  = useRef([])
   const sessionStart  = useRef(null)
+  const recordingRef  = useRef(false)
 
   // ── WebSocket ─────────────────────────────────────────────────
   useEffect(() => { connectWS(); return () => wsRef.current?.close() }, [])
@@ -63,7 +73,7 @@ export default function App() {
       ws.onmessage = (e) => {
         const msg = JSON.parse(e.data)
         if (msg.type === 'waveform') setWaveData(msg.data)
-        if (msg.type === 'prediction') {
+        if (msg.type === 'prediction' && recordingRef.current) {
           setPredictions(msg.data)
           setSourceValues(computeSources(msg.data))
           sessionPreds.current.push(msg.data)
@@ -94,12 +104,15 @@ export default function App() {
     setRecording(next)
 
     if (next) {
-      // Старт сессии
+      recordingRef.current = true
       sessionPreds.current = []
       sessionStart.current = new Date()
       setElapsed(0)
+      setPredictions(null)
+      setSourceValues([0, 0, 0, 0])
       setStatus({ title: 'Запись идёт...', sub: 'Анализ в реальном времени', level: 'ok' })
     } else {
+      recordingRef.current = false
       // Стоп — сохраняем в историю
       const preds = sessionPreds.current
       if (preds.length > 0) {
@@ -117,7 +130,11 @@ export default function App() {
     }
 
     if (wsRef.current?.readyState === WebSocket.OPEN)
-      wsRef.current.send(JSON.stringify({ type: next ? 'start' : 'stop' }))
+      wsRef.current.send(JSON.stringify({
+        type:   next ? 'start' : 'stop',
+        device: audioDevice,
+        gain:   (micGain / 50),   // 50% = 1.0x unity
+      }))
   }
 
   function handleNav(id) {
@@ -126,6 +143,7 @@ export default function App() {
   }
 
   return (
+    <LangProvider>
     <div className="flex w-screen h-screen overflow-hidden bg-[#0C1120]">
       <Sidebar active={page} onChange={handleNav} />
 
@@ -154,11 +172,18 @@ export default function App() {
             {page === 'training' && <TrainingPage />}
             {page === 'dataset'  && <DatasetPage />}
           </main>
-          {showSettings && <SettingsPanel dots={dots} onDotsChange={setDots} />}
+          {showSettings && (
+            <SettingsPanel
+              dots={dots} onDotsChange={setDots}
+              micGain={micGain} onMicGainChange={setMicGain}
+              audioDevice={audioDevice} onAudioDeviceChange={setAudioDevice}
+            />
+          )}
         </div>
 
         <Footer />
       </div>
     </div>
+    </LangProvider>
   )
 }
