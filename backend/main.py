@@ -9,14 +9,16 @@ import numpy as np
 import uvicorn
 from fastapi import FastAPI, File, Form, UploadFile, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, StreamingResponse
 
 from engine  import DiagnosticEngine
 from trainer import Trainer
 
 DATASET_PATH  = Path(__file__).parent.parent / 'dataset'
+MODELS_DIR    = Path(__file__).parent.parent / 'models'
 HF_CONFIG     = Path(__file__).parent.parent / 'hf_config.json'
 EXCLUDED_DIRS = {'diagnostic', 'Отчёты', 'Diagnost_2_0', 'diagnostics', '.cache'}
+MODELS_DIR.mkdir(exist_ok=True)
 
 app = FastAPI(title="AudioDiagnostic API", version="3.0")
 
@@ -75,38 +77,110 @@ def save_hf_config(repo: str = Form(...), token: str = Form(...)):
     return {"ok": True}
 
 
+# ─── Models API ───────────────────────────────────────────────────────────────
+
+@app.get("/models")
+def list_models():
+    from engine import ACTIVE_MODEL_FILE
+    active = ""
+    if ACTIVE_MODEL_FILE.exists():
+        try: active = json.loads(ACTIVE_MODEL_FILE.read_text()).get("name", "")
+        except: pass
+
+    models = []
+    for p in sorted(MODELS_DIR.glob("*.pth")):
+        classes_file = MODELS_DIR / f"{p.stem}_classes.json"
+        classes = []
+        if classes_file.exists():
+            try: classes = json.loads(classes_file.read_text(encoding="utf-8"))
+            except: pass
+        models.append({
+            "name":    p.stem,
+            "size_mb": round(p.stat().st_size / 1024 / 1024, 1),
+            "classes": classes,
+            "active":  p.stem == active,
+        })
+    return {"models": models, "active": active}
+
+@app.get("/models/active")
+def get_active_model():
+    from engine import ACTIVE_MODEL_FILE
+    name = ""
+    if ACTIVE_MODEL_FILE.exists():
+        try: name = json.loads(ACTIVE_MODEL_FILE.read_text()).get("name", "")
+        except: pass
+    return {"name": name, "classes": engine.classes, "loaded": engine.model is not None}
+
+@app.post("/models/activate")
+def activate_model(name: str = Form(...)):
+    ok, msg = engine.load_model_by_name(name)
+    if ok:
+        return {"ok": True, "msg": msg, "classes": engine.classes, "name": name}
+    return JSONResponse({"ok": False, "msg": msg}, status_code=400)
+
+@app.delete("/models/{name}")
+def delete_model(name: str):
+    from engine import ACTIVE_MODEL_FILE
+    pth       = MODELS_DIR / f"{name}.pth"
+    cls_file  = MODELS_DIR / f"{name}_classes.json"
+    if pth.exists():      pth.unlink()
+    if cls_file.exists(): cls_file.unlink()
+    if ACTIVE_MODEL_FILE.exists():
+        try:
+            active = json.loads(ACTIVE_MODEL_FILE.read_text()).get("name", "")
+            if active == name:
+                ACTIVE_MODEL_FILE.unlink()
+                engine.model       = None
+                engine.model_name  = ''
+        except: pass
+    return {"ok": True}
+
+
 # ─── Dataset API ──────────────────────────────────────────────────────────────
 
-def _file_info(path: Path) -> dict:
-    import wave
-    size = path.stat().st_size
-    duration = None
-    try:
-        if path.suffix.lower() == '.wav':
-            with wave.open(str(path)) as w:
-                duration = round(w.getnframes() / w.getframerate(), 1)
-        else:
-            import soundfile as sf
-            duration = round(sf.info(str(path)).duration, 1)
-    except Exception:
-        pass
-    return {"name": path.name, "size": size, "duration": duration}
+_files_cache: dict = {}  # cls → {"mtime": float, "files": [...]}
+
+
+def _cls_dirs():
+    if not DATASET_PATH.exists(): return []
+    return [d for d in sorted(DATASET_PATH.iterdir())
+            if d.is_dir() and d.name not in EXCLUDED_DIRS and not d.name.startswith('.')]
+
+def _natural_key(p: Path):
+    import re
+    return [int(c) if c.isdigit() else c.lower() for c in re.split(r'(\d+)', p.name)]
+
+def _audio_files(cls_dir: Path):
+    files = [f for f in cls_dir.iterdir() if f.is_file() and f.suffix.lower() in {'.wav', '.mp3'}]
+    return sorted(files, key=_natural_key)
+
+def _get_class_files(cls: str) -> list:
+    cls_dir = DATASET_PATH / cls
+    if not cls_dir.exists(): return []
+    mtime = cls_dir.stat().st_mtime
+    cached = _files_cache.get(cls)
+    if cached and cached["mtime"] == mtime:
+        return cached["files"]
+    audio = _audio_files(cls_dir)
+    # Только stat — без чтения WAV заголовков, мгновенно даже для 5000+ файлов
+    files = [{"name": f.name, "size": f.stat().st_size, "duration": None} for f in audio]
+    _files_cache[cls] = {"mtime": mtime, "files": files}
+    return files
 
 
 @app.get("/dataset")
 def get_dataset():
-    if not DATASET_PATH.exists():
-        return {"classes": {}}
     result = {}
-    for cls_dir in sorted(DATASET_PATH.iterdir()):
-        if cls_dir.is_dir() and cls_dir.name not in EXCLUDED_DIRS and not cls_dir.name.startswith('.'):
-            audio = sorted(
-                f for f in cls_dir.iterdir()
-                if f.is_file() and f.suffix.lower() in {'.wav', '.mp3'}
-            )
-            files = [_file_info(f) for f in audio]
-            result[cls_dir.name] = {"count": len(files), "files": files}
+    for cls_dir in _cls_dirs():
+        count = sum(1 for f in cls_dir.iterdir() if f.is_file() and f.suffix.lower() in {'.wav', '.mp3'})
+        result[cls_dir.name] = {"count": count}
     return {"classes": result}
+
+
+@app.get("/dataset/files/{cls}")
+def get_class_files(cls: str):
+    files = _get_class_files(cls)
+    return {"files": files, "count": len(files)}
 
 
 @app.get("/dataset/audio/{cls}/{filename}")
@@ -158,6 +232,135 @@ def get_spectrogram(cls: str, filename: str):
     return StreamingResponse(buf, media_type="image/png")
 
 
+@app.post("/history/spectrogram")
+async def history_spectrogram(file: UploadFile = File(...)):
+    import io, tempfile
+    import librosa, librosa.display
+    import matplotlib
+    matplotlib.use('Agg')
+    import matplotlib.pyplot as plt
+
+    content = await file.read()
+    suffix  = Path(file.filename or 'audio.webm').suffix.lower() or '.webm'
+
+    with tempfile.NamedTemporaryFile(suffix=suffix, delete=False) as tmp:
+        tmp.write(content)
+        tmp_path = Path(tmp.name)
+
+    load_path = tmp_path
+    wav_path  = None
+    try:
+        if suffix not in {'.wav', '.mp3', '.flac', '.ogg'}:
+            import subprocess
+            ffmpeg_bin = shutil.which('ffmpeg') or r'C:\Users\Mi\AppData\Local\Microsoft\WinGet\Links\ffmpeg.exe'
+            wav_path = tmp_path.with_suffix('.wav')
+            r = subprocess.run(
+                [ffmpeg_bin, '-i', str(tmp_path), '-ac', '1', '-ar', '22050', str(wav_path), '-y'],
+                capture_output=True,
+            )
+            if r.returncode == 0:
+                load_path = wav_path
+
+        y, sr = librosa.load(str(load_path), sr=22050)
+        S     = librosa.feature.melspectrogram(y=y, sr=sr, n_mels=128, fmax=8000)
+        S_db  = librosa.power_to_db(S, ref=np.max)
+
+        fig, ax = plt.subplots(figsize=(9, 2.8))
+        fig.patch.set_facecolor('#0C1120')
+        ax.set_facecolor('#111827')
+        img  = librosa.display.specshow(S_db, sr=sr, x_axis='time', y_axis='mel',
+                                        ax=ax, cmap='magma', fmax=8000)
+        cbar = plt.colorbar(img, ax=ax, format='%+2.0f dB')
+        cbar.ax.yaxis.set_tick_params(color='#64748B', labelcolor='#64748B')
+        ax.tick_params(colors='#64748B', labelsize=7)
+        ax.set_xlabel('Время (сек)', color='#64748B', fontsize=8)
+        ax.set_ylabel('Частота', color='#64748B', fontsize=8)
+        for spine in ax.spines.values():
+            spine.set_color('#1E2D45')
+        plt.tight_layout(pad=0.5)
+
+        buf = io.BytesIO()
+        plt.savefig(buf, format='png', dpi=110, bbox_inches='tight', facecolor='#0C1120')
+        plt.close(fig)
+        buf.seek(0)
+        return StreamingResponse(buf, media_type="image/png")
+    except Exception as e:
+        return JSONResponse({"error": str(e)}, status_code=500)
+    finally:
+        tmp_path.unlink(missing_ok=True)
+        if wav_path: wav_path.unlink(missing_ok=True)
+
+
+@app.post("/dataset/balance/{cls}")
+async def balance_class(cls: str):
+    import random as _random, shutil as _shutil
+    loop = asyncio.get_event_loop()
+    q: asyncio.Queue = asyncio.Queue()
+
+    def worker():
+        def put(msg): asyncio.run_coroutine_threadsafe(q.put(msg), loop).result()
+        try:
+            cls_dirs = _cls_dirs()
+            counts = {}
+            for d in cls_dirs:
+                counts[d.name] = sum(
+                    1 for f in d.iterdir()
+                    if f.is_file() and f.suffix.lower() in {'.wav', '.mp3'}
+                )
+            if cls not in counts:
+                put({"type": "error", "text": f"Класс '{cls}' не найден"}); return
+
+            max_count = max(counts.values())
+            cls_count = counts[cls]
+            if cls_count >= max_count:
+                put({"type": "done", "added": 0,
+                     "text": f"Класс уже сбалансирован ({cls_count} файлов)"}); return
+
+            needed = max_count - cls_count
+            put({"type": "log",
+                 "text": f"Макс. в датасете: {max_count} · Текущий: {cls_count} · Нужно добавить: {needed}"})
+
+            cls_dir     = DATASET_PATH / cls
+            src_files   = _audio_files(cls_dir)
+            if not src_files:
+                put({"type": "error", "text": "Нет исходных файлов для копирования"}); return
+
+            existing_stems = [f.stem for f in cls_dir.iterdir() if f.suffix.lower() in {'.wav', '.mp3'}]
+            nums = []
+            for s in existing_stems:
+                try: nums.append(int(s.split('_')[-1]))
+                except: pass
+            idx = (max(nums) + 1) if nums else 0
+
+            added = 0
+            for _ in range(needed):
+                src  = _random.choice(src_files)
+                ext  = src.suffix.lower()
+                dest = cls_dir / f"output_{idx:04d}{ext}"
+                _shutil.copy2(str(src), str(dest))
+                idx   += 1
+                added += 1
+                put({"type": "progress", "done": added, "total": needed,
+                     "text": f"Скопировано {added}/{needed}: {dest.name}"})
+
+            _files_cache.pop(cls, None)
+            put({"type": "done", "added": added})
+        except Exception as e:
+            import traceback
+            put({"type": "error", "text": str(e), "trace": traceback.format_exc()})
+
+    executor.submit(worker)
+
+    async def stream():
+        while True:
+            msg = await q.get()
+            yield json.dumps(msg, ensure_ascii=False) + "\n"
+            if msg["type"] in ("done", "error"):
+                break
+
+    return StreamingResponse(stream(), media_type="application/x-ndjson")
+
+
 @app.post("/dataset/class/{name}")
 def create_class(name: str):
     (DATASET_PATH / name).mkdir(parents=True, exist_ok=True)
@@ -204,42 +407,86 @@ async def cut_audio(
     segment_sec: int = Form(6),
     file: UploadFile = File(...),
 ):
-    import librosa
-    import soundfile as sf
+    import librosa, soundfile as sf
 
-    dest = DATASET_PATH / cls
+    content  = await file.read()
+    filename = file.filename
+    dest     = DATASET_PATH / cls
     dest.mkdir(parents=True, exist_ok=True)
+    loop     = asyncio.get_event_loop()
+    q: asyncio.Queue = asyncio.Queue()
 
-    suffix = Path(file.filename).suffix or '.wav'
-    with tempfile.NamedTemporaryFile(suffix=suffix, delete=False) as tmp:
-        tmp.write(await file.read())
-        tmp_path = Path(tmp.name)
+    def worker():
+        def put(msg): asyncio.run_coroutine_threadsafe(q.put(msg), loop).result()
+        tmp_path = None
+        wav_path = None
+        try:
+            put({"type": "log", "text": f"Получен файл: {filename}"})
+            suffix = Path(filename).suffix.lower() or '.wav'
+            with tempfile.NamedTemporaryFile(suffix=suffix, delete=False) as tmp:
+                tmp.write(content)
+                tmp_path = Path(tmp.name)
 
-    try:
-        signal, sr = librosa.load(str(tmp_path), sr=22050, mono=True)
-        chunk = int(segment_sec * sr)
-        segments = 0
+            # MP4/видео → извлекаем аудио через ffmpeg
+            if suffix in {'.mp4', '.mkv', '.avi', '.mov', '.m4a'}:
+                put({"type": "log", "text": "Извлечение аудио из видео (ffmpeg)..."})
+                import subprocess, shutil
+                ffmpeg_bin = shutil.which('ffmpeg') or r'C:\Users\Mi\AppData\Local\Microsoft\WinGet\Links\ffmpeg.exe'
+                wav_path = tmp_path.with_suffix('.wav')
+                result = subprocess.run(
+                    [ffmpeg_bin, '-i', str(tmp_path), '-ac', '1', '-ar', '22050',
+                     '-vn', str(wav_path), '-y'],
+                    capture_output=True
+                )
+                if result.returncode != 0:
+                    raise RuntimeError(f"ffmpeg ошибка: {result.stderr.decode(errors='ignore')[-200:]}")
+                put({"type": "log", "text": "Аудио извлечено успешно"})
+                load_path = wav_path
+            else:
+                load_path = tmp_path
 
-        # Find next free index
-        existing = [f.stem for f in dest.iterdir() if f.suffix.lower() in {'.wav', '.mp3'}]
-        nums = []
-        for s in existing:
-            try: nums.append(int(s.split('_')[-1]))
-            except: pass
-        idx = (max(nums) + 1) if nums else 0
+            put({"type": "log", "text": "Загрузка аудио..."})
+            signal, sr = librosa.load(str(load_path), sr=22050, mono=True)
+            duration = round(len(signal) / sr, 1)
+            chunk    = int(segment_sec * sr)
 
-        for start in range(0, len(signal), chunk):
-            piece = signal[start:start + chunk]
-            if len(piece) < sr:       # drop clips < 1 second
-                continue
-            out_path = dest / f"output_{idx:03d}.wav"
-            sf.write(str(out_path), piece, sr)
-            idx += 1
-            segments += 1
+            total = sum(1 for s in range(0, len(signal), chunk) if len(signal[s:s+chunk]) >= sr)
+            put({"type": "log", "text": f"Длительность: {duration} сек → {total} сегментов по {segment_sec} сек"})
 
-        return {"ok": True, "segments": segments, "class": cls}
-    finally:
-        tmp_path.unlink(missing_ok=True)
+            existing = [f.stem for f in dest.iterdir() if f.suffix.lower() in {'.wav', '.mp3'}]
+            nums = []
+            for s in existing:
+                try: nums.append(int(s.split('_')[-1]))
+                except: pass
+            idx = (max(nums) + 1) if nums else 0
+
+            segments = 0
+            for start in range(0, len(signal), chunk):
+                piece = signal[start:start + chunk]
+                if len(piece) < sr:
+                    continue
+                sf.write(str(dest / f"output_{idx:03d}.wav"), piece, sr)
+                idx += 1; segments += 1
+                put({"type": "progress", "done": segments, "total": total,
+                     "text": f"Сегмент {segments}/{total} сохранён"})
+
+            put({"type": "done", "segments": segments})
+        except Exception as e:
+            put({"type": "error", "text": str(e)})
+        finally:
+            if tmp_path: tmp_path.unlink(missing_ok=True)
+            if wav_path: wav_path.unlink(missing_ok=True)
+
+    executor.submit(worker)
+
+    async def stream():
+        while True:
+            msg = await q.get()
+            yield json.dumps(msg, ensure_ascii=False) + "\n"
+            if msg["type"] in ("done", "error"):
+                break
+
+    return StreamingResponse(stream(), media_type="application/x-ndjson")
 
 
 @app.get("/audio/devices")
@@ -265,23 +512,24 @@ async def ws_endpoint(ws: WebSocket):
     await ws.accept()
     loop = asyncio.get_event_loop()
 
-    # Сообщаем фронту статус модели
+    # Сообщаем фронту статус модели (динамически от текущего engine)
     await _send(ws, {
         "type":  "status",
-        "title": "Модель загружена" if _model_ok else "Без модели",
-        "sub":   _model_msg,
-        "level": "ok" if _model_ok else "warn",
+        "title": "Модель загружена" if engine.model is not None else "Без модели",
+        "sub":   engine.model_name if engine.model_name else "Готова к работе",
+        "level": "ok" if engine.model is not None else "warn",
     })
 
-    recording   = False
-    stream      = None
-    send_task   = None
+    recording       = False
+    stream          = None
+    send_task       = None
     audio_queue: asyncio.Queue = asyncio.Queue(maxsize=200)
+    inference_step  = {'sec': getattr(engine, 'STEP_SEC', 5.0)}
 
     # ── Цикл отправки аудио + предсказаний ────────────────────
     async def sender():
         buf           = np.zeros(engine.SR * engine.WINDOW_SEC, dtype=np.float32)
-        step_samples  = int(engine.SR * engine.STEP_SEC)
+        step_samples  = int(engine.SR * inference_step['sec'])
         since_predict = 0
 
         while True:
@@ -325,6 +573,7 @@ async def ws_endpoint(ws: WebSocket):
                 chunk_size  = int(engine.SR * 0.05)     # 50 мс
                 device_id   = data.get("device", None)  # None = default
                 gain        = float(data.get("gain", 1.0))
+                inference_step['sec'] = max(1.0, min(60.0, float(data.get("step_sec", getattr(engine, 'STEP_SEC', 5.0)))))
 
                 def audio_callback(indata, frames, time_info, status):
                     chunk = (indata[:, 0] * gain).copy()
@@ -451,12 +700,18 @@ async def ws_train(ws: WebSocket):
 
             elif data['type'] == 'train_start':
                 trainer.start(
-                    dataset_path = data.get('dataset_path') or str(DATASET_PATH),
-                    epochs       = int(data.get('epochs', 40)),
-                    batch_size   = int(data.get('batch_size', 32)),
-                    lr           = float(data.get('lr', 0.001)),
-                    augment      = bool(data.get('augment', True)),
-                    on_msg       = on_msg,
+                    dataset_path           = data.get('dataset_path') or str(DATASET_PATH),
+                    epochs                 = int(data.get('epochs', 40)),
+                    batch_size             = int(data.get('batch_size', 32)),
+                    lr                     = float(data.get('lr', 0.001)),
+                    augment                = bool(data.get('augment', True)),
+                    on_msg                 = on_msg,
+                    model_name             = data.get('model_name', ''),
+                    class_weight_overrides = data.get('class_weight_overrides', {}),
+                    parallel_mode          = data.get('parallel_mode', 'threads'),
+                    n_workers              = int(data.get('n_workers', 0)),
+                    mfcc_device            = data.get('mfcc_device', 'auto'),
+                    split_mode             = data.get('split_mode', 'standard'),
                 )
 
             elif data['type'] == 'train_stop':

@@ -60,15 +60,19 @@ function TrainLog({ logs }) {
 }
 
 // ── Main ──────────────────────────────────────────────────────────────────────
-function loadZeroWeights() {
-  try { return new Set(JSON.parse(localStorage.getItem('zeroWeightClasses') || '[]')) }
-  catch { return new Set() }
+function loadClassWeights() {
+  try { return JSON.parse(localStorage.getItem('classWeightOverrides') || '{}') }
+  catch { return {} }
 }
 
-export default function TrainingPage() {
+export default function TrainingPage({ onTrainingChange }) {
   const t = useLang()
   const [datasetInfo,   setDatasetInfo]   = useState(null)
-  const [zeroWeights,   setZeroWeights]   = useState(loadZeroWeights)
+  const [classWeights,  setClassWeights]  = useState(loadClassWeights)
+  const [modelName,     setModelName]     = useState('')
+  const [lastModelName, setLastModelName] = useState('')
+  const [activating,    setActivating]    = useState(false)
+  const [activated,     setActivated]     = useState(false)
   const [epochs,    setEpochs]    = useState(40)
   const [batchSize, setBatchSize] = useState(32)
   const [lr,        setLr]        = useState(0.001)
@@ -102,10 +106,14 @@ export default function TrainingPage() {
   }, [])
 
   function toggleZeroWeight(cls) {
-    setZeroWeights(prev => {
-      const next = new Set(prev)
-      next.has(cls) ? next.delete(cls) : next.add(cls)
-      localStorage.setItem('zeroWeightClasses', JSON.stringify([...next]))
+    setClassWeights(prev => {
+      const next = { ...prev }
+      if ((next[cls] ?? 1) === 0) {
+        delete next[cls]   // восстановить → 1×
+      } else {
+        next[cls] = 0      // обнулить
+      }
+      localStorage.setItem('classWeightOverrides', JSON.stringify(next))
       return next
     })
   }
@@ -151,10 +159,20 @@ export default function TrainingPage() {
       addLog(`Эп ${msg.epoch}/${msg.total} | Train ${(msg.train_acc*100).toFixed(1)}% | Val ${(msg.test_acc*100).toFixed(1)}% | LR ${msg.lr}`, 'epoch')
     }
     if (msg.type === 'train_complete') {
-      setPhase('done'); setTraining(false)
+      setPhase('done'); setTraining(false); onTrainingChange?.(false)
+      setLastModelName(msg.model_name || modelName.trim() || 'model')
+      setActivated(false)
       addLog(`Готово! Лучшая точность: ${(msg.best_acc*100).toFixed(1)}% · Классы: ${msg.classes?.join(', ')}`, 'success')
     }
-    if (msg.type === 'train_error') { setPhase('error'); setTraining(false); addLog(`Ошибка: ${msg.text}`, 'error') }
+    if (msg.type === 'train_error') { setPhase('error'); setTraining(false); onTrainingChange?.(false); addLog(`Ошибка: ${msg.text}`, 'error') }
+  }
+
+  async function handleActivate() {
+    setActivating(true)
+    const fd = new FormData(); fd.append('name', lastModelName)
+    const res = await fetch('http://localhost:8000/models/activate', { method: 'POST', body: fd }).catch(() => null)
+    if (res?.ok) { const d = await res.json(); if (d.ok) setActivated(true) }
+    setActivating(false)
   }
 
   function openWS(onReady) {
@@ -173,16 +191,34 @@ export default function TrainingPage() {
   }
 
   function handleStart() {
-    setTraining(true); setPhase('loading'); setLogs([])
+    setTraining(true); setPhase('loading'); setLogs([]); onTrainingChange?.(true)
+    let classWeightOverrides = {}
+    let parallelMode = 'threads'
+    let nWorkers = 0
+    let mfccDevice = 'auto'
+    try { classWeightOverrides = JSON.parse(localStorage.getItem('classWeightOverrides') || '{}') } catch {}
+    try { parallelMode = localStorage.getItem('trainingParallelMode') || 'threads' } catch {}
+    try { nWorkers = parseInt(localStorage.getItem('trainingWorkers') || '0') || 0 } catch {}
+    try { mfccDevice = localStorage.getItem('trainingMfccDevice') || 'auto' } catch {}
+    let splitMode = 'standard'
+    try { splitMode = localStorage.getItem('trainingSplitMode') || 'standard' } catch {}
     openWS(ws => {
       addLog('Подключено, запускаю обучение...')
-      ws.send(JSON.stringify({ type: 'train_start', epochs, batch_size: batchSize, lr, augment }))
+      ws.send(JSON.stringify({
+        type: 'train_start', epochs, batch_size: batchSize, lr, augment,
+        model_name: modelName.trim() || 'model',
+        class_weight_overrides: classWeightOverrides,
+        parallel_mode: parallelMode,
+        n_workers: nWorkers,
+        mfcc_device: mfccDevice,
+        split_mode: splitMode,
+      }))
     })
   }
 
   function handleStop() {
     wsRef.current?.send(JSON.stringify({ type: 'train_stop' }))
-    setTraining(false); setPhase('idle'); addLog('Остановка запрошена...')
+    setTraining(false); setPhase('idle'); onTrainingChange?.(false); addLog('Остановка запрошена...')
   }
 
   useEffect(() => () => wsRef.current?.close(), [])
@@ -274,33 +310,20 @@ export default function TrainingPage() {
           ) : (
             <>
               <div className="flex flex-wrap gap-1.5">
-                {Object.entries(datasetInfo).map(([cls, info]) => {
-                  const isZero = zeroWeights.has(cls)
-                  return (
-                    <button
-                      key={cls}
-                      onClick={() => toggleZeroWeight(cls)}
-                      title={isZero ? 'Нулевой вес — нажмите чтобы снять' : 'Нажмите чтобы назначить нулевой вес'}
-                      className="flex items-center gap-1.5 rounded-md px-2 py-1 border transition-all"
-                      style={isZero
-                        ? { background: '#1A2235', borderColor: '#374151', opacity: 0.5 }
-                        : { background: '#1A2235', borderColor: '#1E2D45' }}
-                    >
-                      {isZero && <span className="text-[9px] font-bold text-[#64748B]">0×</span>}
-                      <span className={`text-[11px] font-semibold ${isZero ? 'line-through text-[#64748B]' : 'text-[#E2E8F0]'}`}>{cls}</span>
-                      <span className="flex items-center gap-0.5 text-[10px] text-[#64748B]">
-                        <FileAudio size={9} />
-                        {info.count}
-                      </span>
-                    </button>
-                  )
-                })}
+                {Object.entries(datasetInfo).map(([cls, info]) => (
+                  <div
+                    key={cls}
+                    className="flex items-center gap-1.5 rounded-md px-2 py-1 border"
+                    style={{ background: '#1A2235', borderColor: '#1E2D45' }}
+                  >
+                    <span className="text-[11px] font-semibold text-[#E2E8F0]">{cls}</span>
+                    <span className="flex items-center gap-0.5 text-[10px] text-[#64748B]">
+                      <FileAudio size={9} />
+                      {info.count}
+                    </span>
+                  </div>
+                ))}
               </div>
-              {zeroWeights.size > 0 && (
-                <p className="text-[10px] text-[#475569] mt-1">
-                  Классы с 0× не влияют на индикаторы неисправностей в диагностике
-                </p>
-              )}
             </>
           )}
         </div>
@@ -338,6 +361,19 @@ export default function TrainingPage() {
             className={`w-11 h-6 rounded-full relative transition-colors disabled:opacity-50 ${augment ? 'bg-[#3B82F6]' : 'bg-[#1E2D45]'}`}>
             <span className={`absolute top-[3px] w-[18px] h-[18px] bg-white rounded-full transition-all ${augment ? 'left-[23px]' : 'left-[3px]'}`} />
           </button>
+        </div>
+
+        {/* Название модели */}
+        <div>
+          <label className="text-[11px] text-[#64748B] block mb-1">Название модели</label>
+          <input
+            value={modelName}
+            onChange={e => setModelName(e.target.value)}
+            disabled={training}
+            placeholder="Например: модель_с_речью"
+            className="w-full bg-[#1A2235] border border-[#1E2D45] rounded-lg px-3 py-2 text-[12px] text-[#E2E8F0] outline-none focus:border-[#3B82F6] disabled:opacity-50 font-mono"
+          />
+          <p className="text-[10px] text-[#475569] mt-1">Имя файла модели — можно выбрать в настройках для диагностики</p>
         </div>
 
         <button onClick={training ? handleStop : handleStart}
@@ -427,6 +463,22 @@ export default function TrainingPage() {
             <p className="text-[11px] text-[#64748B] mb-1">{t('train.log')}</p>
             <TrainLog logs={logs} />
           </div>
+
+          {phase === 'done' && lastModelName && (
+            <button
+              onClick={handleActivate}
+              disabled={activating || activated}
+              className="w-full flex items-center justify-center gap-2 py-3 rounded-xl text-[13px] font-semibold text-white transition-all disabled:opacity-60"
+              style={{ background: activated ? '#22C55E' : 'var(--accent)' }}
+            >
+              {activating && <RefreshCw size={14} className="animate-spin" />}
+              {activated
+                ? `✓ Модель «${lastModelName}» активирована`
+                : activating
+                  ? 'Активация...'
+                  : `Использовать модель «${lastModelName}»`}
+            </button>
+          )}
         </div>
       )}
     </div>

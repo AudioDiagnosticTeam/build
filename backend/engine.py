@@ -3,8 +3,10 @@ from pathlib import Path
 
 import numpy as np
 
-BUILD_DIR    = Path(__file__).parent.parent
-CLASSES_FILE = BUILD_DIR / "model_classes.json"
+BUILD_DIR          = Path(__file__).parent.parent
+MODELS_DIR         = BUILD_DIR / "models"
+CLASSES_FILE       = BUILD_DIR / "model_classes.json"
+ACTIVE_MODEL_FILE  = BUILD_DIR / "active_model.json"
 MODEL_PATHS  = [
     BUILD_DIR / "fault_diagnosis_model_best.pth",
     BUILD_DIR / "fault_diagnosis_model.pth",
@@ -21,12 +23,54 @@ class DiagnosticEngine:
     TARGET_T   = 215
 
     def __init__(self):
-        self.model   = None
-        self.device  = None
-        self.classes = []
+        self.model      = None
+        self.device     = None
+        self.classes    = []
+        self.model_name = ''
+
+    # ── Загрузка модели по имени ──────────────────────────────
+    def load_model_by_name(self, name: str) -> tuple[bool, str]:
+        path = MODELS_DIR / f"{name}.pth"
+        classes_path = MODELS_DIR / f"{name}_classes.json"
+        if not path.exists():
+            return False, f"Модель {name}.pth не найдена"
+        try:
+            import torch
+            self.classes = (
+                json.loads(classes_path.read_text(encoding="utf-8"))
+                if classes_path.exists()
+                else json.loads(CLASSES_FILE.read_text(encoding="utf-8-sig"))
+                if CLASSES_FILE.exists()
+                else ["НОРМА", "ДРЕБЕЗГ", "СВИСТ", "СКРИП", "СТУК"]
+            )
+            self.device = "cuda" if torch.cuda.is_available() else "cpu"
+            state = torch.load(path, map_location=self.device, weights_only=True)
+            n = state["fc3.weight"].shape[0]
+            if n != len(self.classes):
+                self.classes = [f"Класс {i}" for i in range(n)]
+            model = self._build_cnn(n)
+            model.load_state_dict(state)
+            model.to(self.device).eval()
+            self.model = model
+            self.model_name = name
+            ACTIVE_MODEL_FILE.write_text(json.dumps({"name": name}), encoding="utf-8")
+            return True, f"{name}.pth · {n} классов"
+        except Exception as e:
+            return False, str(e)
 
     # ── Загрузка модели ───────────────────────────────────────
     def load_model(self) -> tuple[bool, str]:
+        # Если есть активная именная модель — загружаем её
+        if ACTIVE_MODEL_FILE.exists():
+            try:
+                name = json.loads(ACTIVE_MODEL_FILE.read_text(encoding="utf-8")).get("name", "")
+                if name:
+                    ok, msg = self.load_model_by_name(name)
+                    if ok:
+                        return ok, msg
+            except Exception:
+                pass
+
         try:
             import torch
         except ImportError:
@@ -51,6 +95,7 @@ class DiagnosticEngine:
                 model.load_state_dict(state)
                 model.to(self.device).eval()
                 self.model = model
+                self.model_name = path.stem
                 dev_str = "GPU (CUDA)" if self.device == "cuda" else "CPU"
                 return True, f"{path.name} · {n} классов · {dev_str}"
             except Exception:

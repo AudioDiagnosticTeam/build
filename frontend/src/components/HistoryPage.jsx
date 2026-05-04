@@ -1,5 +1,5 @@
-import { useState } from 'react'
-import { Trash2, ChevronDown, ChevronUp, CheckCircle, AlertTriangle, AlertCircle, ClipboardList } from 'lucide-react'
+import { useState, useEffect } from 'react'
+import { Trash2, ChevronDown, ChevronUp, CheckCircle, AlertTriangle, AlertCircle, ClipboardList, BarChart2, X } from 'lucide-react'
 import { useLang } from '../i18n'
 
 const CLASS_COLORS = {
@@ -164,6 +164,9 @@ function FaultReport({ predictions, isNormal, topCls, topProb }) {
       )}
 
       {/* Второстепенные */}
+      {faults.slice(1).length > 0 && (
+        <p className="text-[10px] font-semibold text-[#475569] uppercase tracking-wide">Другие неисправности</p>
+      )}
       {faults.slice(1).map(([cls, prob]) => (
         <div key={cls} className="flex items-center gap-2 bg-[#1A2235] border border-[#1E2D45] rounded-lg px-3 py-1.5">
           <span className="w-1.5 h-1.5 rounded-full shrink-0" style={{ background: faultColor(prob) }} />
@@ -181,12 +184,56 @@ function FaultReport({ predictions, isNormal, topCls, topProb }) {
   )
 }
 
+function SpectrogramModal({ audioBlob, onClose }) {
+  const [imgUrl, setImgUrl] = useState(null)
+  const [loading, setLoading] = useState(true)
+  const [err, setErr] = useState(null)
+
+  useEffect(() => {
+    fetch(audioBlob)
+      .then(r => r.blob())
+      .then(blob => {
+        const fd = new FormData()
+        fd.append('file', blob, 'audio.webm')
+        return fetch('http://localhost:8000/history/spectrogram', { method: 'POST', body: fd })
+      })
+      .then(r => r.ok ? r.blob() : Promise.reject('Ошибка сервера'))
+      .then(b => setImgUrl(URL.createObjectURL(b)))
+      .catch(e => setErr(String(e)))
+      .finally(() => setLoading(false))
+  }, [])
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center" onClick={onClose}>
+      <div className="absolute inset-0 bg-black/70 backdrop-blur-sm" />
+      <div className="relative z-10 bg-[#111827] border border-[#1E2D45] rounded-xl p-4 max-w-[680px] w-full mx-4 shadow-2xl"
+           onClick={e => e.stopPropagation()}>
+        <div className="flex items-center justify-between mb-3">
+          <span className="text-[13px] font-semibold text-[#E2E8F0]">Спектрограмма сессии</span>
+          <button onClick={onClose} className="text-[#475569] hover:text-[#E2E8F0] transition-colors">
+            <X size={16} />
+          </button>
+        </div>
+        {loading && <div className="text-[11px] text-[#64748B] text-center py-8">Построение спектрограммы...</div>}
+        {err    && <div className="text-[11px] text-[#EF4444] text-center py-8">{err}</div>}
+        {imgUrl && <img src={imgUrl} alt="spectrogram" className="w-full rounded-lg" />}
+      </div>
+    </div>
+  )
+}
+
 // Карточка одной сессии
 function HistoryCard({ entry }) {
-  const [expanded, setExpanded] = useState(false)
-  const [topCls, topProb] = topDiagnosis(entry.predictions)
-  const isNormal = topCls === 'НОРМА' || topProb < 0.4
+  const [expanded,  setExpanded]  = useState(false)
+  const [showSpec,  setShowSpec]  = useState(false)
   const t = useLang()
+
+  const faultEntries = Object.entries(entry.predictions)
+    .filter(([cls, p]) => !BACKGROUND.has(cls) && p > 0.20)
+    .sort((a, b) => b[1] - a[1])
+  const topFault = faultEntries[0] ?? null
+  const [topCls, topProb] = topFault ?? topDiagnosis(entry.predictions)
+  const isNormal = !topFault || (entry.predictions['НОРМА'] ?? 0) > 0.60
 
   return (
     <div className="bg-[#111827] border border-[#1E2D45] rounded-xl overflow-hidden">
@@ -258,7 +305,27 @@ function HistoryCard({ entry }) {
             </div>
           </div>
           <TimelineChart timeline={entry.timeline} />
+
+          {/* Audio playback */}
+          {entry.audioBlob && (
+            <div className="mt-3 flex items-center gap-2">
+              <audio controls src={entry.audioBlob}
+                className="flex-1 h-8 rounded-lg"
+                style={{ colorScheme: 'dark', accentColor: 'var(--accent)' }} />
+              <button
+                onClick={() => setShowSpec(true)}
+                className="flex items-center gap-1.5 px-2.5 py-1.5 bg-[#1A2235] border border-[#1E2D45] rounded-lg text-[11px] text-[#E2E8F0] hover:bg-[#1E2D45] transition-colors shrink-0"
+              >
+                <BarChart2 size={12} />
+                Спектрограмма
+              </button>
+            </div>
+          )}
         </div>
+      )}
+
+      {showSpec && entry.audioBlob && (
+        <SpectrogramModal audioBlob={entry.audioBlob} onClose={() => setShowSpec(false)} />
       )}
     </div>
   )

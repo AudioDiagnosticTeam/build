@@ -10,6 +10,18 @@ import TrainingPage    from './components/TrainingPage'
 import DatasetPage     from './components/DatasetPage'
 import SettingsPanel   from './components/SettingsPanel'
 
+const FAULT_BG = new Set(['НОРМА', 'РЕЧЬ'])
+
+function getTopFaultClass(preds) {
+  if (!preds) return null
+  const zeros = getZeroWeightClasses()
+  const entries = Object.entries(preds)
+    .filter(([cls, p]) => !FAULT_BG.has(cls) && !zeros.has(cls) && p > 0.35)
+    .sort((a, b) => b[1] - a[1])
+  if (!entries.length || (preds['НОРМА'] ?? 0) > 0.60) return null
+  return entries[0][0]
+}
+
 const FAULT_WEIGHTS = {
   НОРМА:   [0.03, 0.03, 0.02, 0.02],
   ДРЕБЕЗГ: [0.20, 0.70, 0.05, 0.40],
@@ -19,8 +31,10 @@ const FAULT_WEIGHTS = {
 }
 
 function getZeroWeightClasses() {
-  try { return new Set(JSON.parse(localStorage.getItem('zeroWeightClasses') || '[]')) }
-  catch { return new Set() }
+  try {
+    const ov = JSON.parse(localStorage.getItem('classWeightOverrides') || '{}')
+    return new Set(Object.entries(ov).filter(([, v]) => v === 0).map(([k]) => k))
+  } catch { return new Set() }
 }
 
 function computeSources(probs) {
@@ -52,15 +66,20 @@ export default function App() {
   const [sourceValues, setSourceValues] = useState([0.3, 0.2, 0.1, 0.05])
   const [status,       setStatus]       = useState({ title: 'Инициализация...', sub: 'Загрузка', level: 'warn' })
   const [history,      setHistory]      = useState([])
-  const [dots,         setDots]         = useState(true)
-  const [audioDevice,  setAudioDevice]  = useState(null)   // sounddevice index
-  const [micGain,      setMicGain]      = useState(70)     // 0-100 → gain 0-2
+  const [dots,            setDots]            = useState(true)
+  const [audioDevice,     setAudioDevice]     = useState(null)
+  const [micGain,         setMicGain]         = useState(70)
+  const [trainingActive,  setTrainingActive]  = useState(false)
+  const [navPending,      setNavPending]      = useState(null)  // куда хотели уйти
 
-  const wsRef         = useRef(null)
-  const clockRef      = useRef(null)
-  const sessionPreds  = useRef([])
-  const sessionStart  = useRef(null)
-  const recordingRef  = useRef(false)
+  const wsRef            = useRef(null)
+  const clockRef         = useRef(null)
+  const sessionPreds     = useRef([])
+  const sessionStart     = useRef(null)
+  const recordingRef     = useRef(false)
+  const mediaRecorderRef = useRef(null)
+  const audioChunksRef   = useRef([])
+  const consecutiveBuf   = useRef([])   // последние N топ-классов подряд
 
   // ── WebSocket ─────────────────────────────────────────────────
   useEffect(() => { connectWS(); return () => wsRef.current?.close() }, [])
@@ -77,6 +96,32 @@ export default function App() {
           setPredictions(msg.data)
           setSourceValues(computeSources(msg.data))
           sessionPreds.current.push(msg.data)
+
+          // ── Логика N подряд → авто-событие в историю ──────────
+          const topFault  = getTopFaultClass(msg.data)
+          const threshold = parseInt(localStorage.getItem('consecutiveThreshold') || '3')
+          const buf = consecutiveBuf.current
+          if (!topFault || (buf.length > 0 && buf[buf.length - 1] !== topFault)) {
+            consecutiveBuf.current = topFault ? [topFault] : []
+          } else if (topFault) {
+            consecutiveBuf.current = [...buf, topFault]
+          }
+          if (topFault && consecutiveBuf.current.length >= threshold) {
+            const recent = sessionPreds.current.slice(-threshold)
+            const avg    = avgPredictions(recent)
+            setHistory(h => [{
+              id:            Date.now(),
+              startedAt:     new Date(),
+              duration:      0,
+              predictions:   avg,
+              sourceValues:  computeSources(avg),
+              timeline:      recent,
+              audioBlob:     null,
+              autoDetected:  true,
+              detectedFault: topFault,
+            }, ...h])
+            consecutiveBuf.current = []
+          }
         }
         if (msg.type === 'status')
           setStatus({ title: msg.title, sub: msg.sub, level: msg.level })
@@ -106,40 +151,82 @@ export default function App() {
     if (next) {
       recordingRef.current = true
       sessionPreds.current = []
+      audioChunksRef.current = []
+      consecutiveBuf.current = []
       sessionStart.current = new Date()
       setElapsed(0)
       setPredictions(null)
       setSourceValues([0, 0, 0, 0])
       setStatus({ title: 'Запись идёт...', sub: 'Анализ в реальном времени', level: 'ok' })
+
+      // Захватываем аудио для сохранения в историю
+      navigator.mediaDevices?.getUserMedia({ audio: true })
+        .then(stream => {
+          const mr = new MediaRecorder(stream)
+          mediaRecorderRef.current = mr
+          mr.ondataavailable = e => { if (e.data.size > 0) audioChunksRef.current.push(e.data) }
+          mr.start(500)
+        })
+        .catch(() => { mediaRecorderRef.current = null })
+
     } else {
       recordingRef.current = false
-      // Стоп — сохраняем в историю
-      const preds = sessionPreds.current
-      if (preds.length > 0) {
+      const preds     = sessionPreds.current
+      const sessionId = Date.now()
+      const hasPreds  = preds.length > 0
+
+      if (hasPreds) {
         const avg = avgPredictions(preds)
         setHistory(h => [{
-          id:           Date.now(),
+          id:           sessionId,
           startedAt:    sessionStart.current,
           duration:     elapsed,
           predictions:  avg,
           sourceValues: computeSources(avg),
-          timeline:     preds,          // полная серия для графика
+          timeline:     preds,
+          audioBlob:    null,
         }, ...h])
       }
+
+      // Останавливаем MediaRecorder и сохраняем аудио
+      const mr = mediaRecorderRef.current
+      if (mr && mr.state !== 'inactive') {
+        mr.onstop = () => {
+          const blob = new Blob(audioChunksRef.current, { type: 'audio/webm' })
+          const url  = URL.createObjectURL(blob)
+          mr.stream.getTracks().forEach(t => t.stop())
+          if (hasPreds)
+            setHistory(h => h.map(e => e.id === sessionId ? { ...e, audioBlob: url } : e))
+        }
+        mr.stop()
+      }
+
       setStatus({ title: 'Остановлено', sub: 'Нажмите для новой записи', level: 'warn' })
     }
 
     if (wsRef.current?.readyState === WebSocket.OPEN)
       wsRef.current.send(JSON.stringify({
-        type:   next ? 'start' : 'stop',
-        device: audioDevice,
-        gain:   (micGain / 50),   // 50% = 1.0x unity
+        type:     next ? 'start' : 'stop',
+        device:   audioDevice,
+        gain:     (micGain / 50),
+        ...(next ? { step_sec: parseFloat(localStorage.getItem('inferenceInterval') || '5') } : {}),
       }))
   }
 
   function handleNav(id) {
     if (id === 'settings') { setShowSettings(s => !s); return }
+    if (trainingActive && id !== 'training') { setNavPending(id); return }
     setPage(id)
+  }
+
+  function confirmLeave() {
+    setTrainingActive(false)
+    setPage(navPending)
+    setNavPending(null)
+  }
+
+  function cancelLeave() {
+    setNavPending(null)
   }
 
   return (
@@ -169,7 +256,7 @@ export default function App() {
             {page === 'history' && (
               <HistoryPage history={history} onClear={() => setHistory([])} />
             )}
-            {page === 'training' && <TrainingPage />}
+            {page === 'training' && <TrainingPage onTrainingChange={setTrainingActive} />}
             {page === 'dataset'  && <DatasetPage />}
           </main>
           {showSettings && (
@@ -184,6 +271,32 @@ export default function App() {
         <Footer />
       </div>
     </div>
+
+    {/* Оверлей подтверждения прерывания обучения */}
+    {navPending && (
+      <div className="fixed inset-0 z-50 flex items-center justify-center">
+        <div className="absolute inset-0 bg-black/60 backdrop-blur-sm" />
+        <div className="relative z-10 bg-[#111827] border border-[#1E2D45] rounded-2xl px-8 py-7 shadow-2xl max-w-[360px] w-full mx-4">
+          <div className="text-3xl mb-4 text-center">⚠️</div>
+          <p className="text-[15px] font-bold text-[#E2E8F0] text-center mb-2">Прервать обучение?</p>
+          <p className="text-[12px] text-[#64748B] text-center mb-6">Обучение модели ещё идёт. Если уйти — прогресс будет потерян.</p>
+          <div className="flex flex-col gap-2">
+            <button
+              onClick={confirmLeave}
+              className="w-full py-2.5 rounded-xl bg-[#EF4444] hover:bg-[#DC2626] text-white text-[13px] font-semibold transition-colors"
+            >
+              Да, прервать обучение
+            </button>
+            <button
+              onClick={cancelLeave}
+              className="w-full py-2.5 rounded-xl bg-[#1A2235] hover:bg-[#1E2D45] text-[#E2E8F0] text-[13px] font-semibold transition-colors border border-[#1E2D45]"
+            >
+              Продолжить обучение
+            </button>
+          </div>
+        </div>
+      </div>
+    )}
     </LangProvider>
   )
 }

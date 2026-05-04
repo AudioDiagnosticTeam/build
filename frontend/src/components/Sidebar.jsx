@@ -1,14 +1,16 @@
 import { useState } from 'react'
 import { Activity, ClipboardList, Brain, Database, Info, X } from 'lucide-react'
+import { useLang } from '../i18n'
 
-const NAV = [
-  { icon: Activity,      label: 'Диагностика', id: 'diag'     },
-  { icon: ClipboardList, label: 'История',     id: 'history'  },
-  { icon: Brain,         label: 'Обучение',    id: 'training' },
-  { icon: Database,      label: 'Датасет',     id: 'dataset'  },
+const NAV_IDS = [
+  { icon: Activity,      key: 'nav.diag',     id: 'diag'     },
+  { icon: ClipboardList, key: 'nav.history',  id: 'history'  },
+  { icon: Brain,         key: 'nav.training', id: 'training' },
+  { icon: Database,      key: 'nav.dataset',  id: 'dataset'  },
 ]
 
 function AboutOverlay({ onClose }) {
+  const t = useLang()
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center">
       <div className="absolute inset-0 bg-black/60 backdrop-blur-sm" onClick={onClose} />
@@ -25,23 +27,19 @@ function AboutOverlay({ onClose }) {
             <Activity size={16} style={{ color: 'var(--accent)' }} />
           </div>
           <div>
-            <h2 className="text-[16px] font-bold text-[#E2E8F0]">Диагностика по звуку</h2>
+            <h2 className="text-[16px] font-bold text-[#E2E8F0]">{t('about.title')}</h2>
             <span className="text-[11px] font-medium" style={{ color: 'var(--accent)' }}>v3.0</span>
           </div>
         </div>
 
-        <p className="text-[13px] text-[#94A3B8] leading-relaxed mb-5">
-          Система акустической диагностики автомобиля на основе нейронной сети.
-          Анализирует звук двигателя и трансмиссии в реальном времени, определяя
-          характер возможных неисправностей.
-        </p>
+        <p className="text-[13px] text-[#94A3B8] leading-relaxed mb-5">{t('about.desc')}</p>
 
         <div className="space-y-2 mb-6">
           {[
-            ['Модель',    'CNN · 4 класса неисправностей'],
-            ['Датасет',   'AudioDiagnosticTeam / dataset'],
-            ['Фреймворк', 'PyTorch + FastAPI + React'],
-            ['Автор',     'AudioDiagnosticTeam'],
+            [t('about.model'),     t('about.model_val')],
+            [t('about.dataset'),   'AudioDiagnosticTeam / dataset'],
+            [t('about.framework'), 'PyTorch + FastAPI + React'],
+            [t('about.author'),    'AudioDiagnosticTeam'],
           ].map(([k, v]) => (
             <div key={k} className="flex justify-between text-[12px]">
               <span className="text-[#64748B]">{k}</span>
@@ -52,9 +50,7 @@ function AboutOverlay({ onClose }) {
 
         <div className="h-px bg-[#1E2D45] mb-4" />
 
-        <p className="text-[10px] text-[#475569] text-center">
-          Диагностика является предварительной и не заменяет профессионального осмотра
-        </p>
+        <p className="text-[10px] text-[#475569] text-center">{t('about.disclaimer')}</p>
       </div>
     </div>
   )
@@ -62,6 +58,7 @@ function AboutOverlay({ onClose }) {
 
 export default function Sidebar({ active, onChange }) {
   const [showAbout, setShowAbout] = useState(false)
+  const t = useLang()
 
   return (
     <>
@@ -76,7 +73,7 @@ export default function Sidebar({ active, onChange }) {
 
         {/* Nav */}
         <nav className="flex flex-col flex-1">
-          {NAV.map(({ icon: Icon, label, id }) => (
+          {NAV_IDS.map(({ icon: Icon, key, id }) => (
             <button
               key={id}
               onClick={() => onChange(id)}
@@ -86,7 +83,7 @@ export default function Sidebar({ active, onChange }) {
                 : { borderColor: 'transparent', color: '#64748B' }}
             >
               <Icon size={18} />
-              <span>{label}</span>
+              <span>{t(key)}</span>
             </button>
           ))}
         </nav>
@@ -97,7 +94,7 @@ export default function Sidebar({ active, onChange }) {
           className="flex flex-col items-center justify-center gap-1 h-[62px] text-[9px] text-[#64748B] hover:text-[#E2E8F0] hover:bg-[#1A2235] mb-2 transition-colors border-l-[3px] border-transparent"
         >
           <Info size={16} />
-          <span>О программе</span>
+          <span>{t('nav.about')}</span>
         </button>
       </aside>
 

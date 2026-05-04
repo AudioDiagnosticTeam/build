@@ -14,8 +14,10 @@ const FAULT_HINTS = {
 }
 
 function getZeroWeights() {
-  try { return new Set(JSON.parse(localStorage.getItem('zeroWeightClasses') || '[]')) }
-  catch { return new Set() }
+  try {
+    const ov = JSON.parse(localStorage.getItem('classWeightOverrides') || '{}')
+    return new Set(Object.entries(ov).filter(([, v]) => v === 0).map(([k]) => k))
+  } catch { return new Set() }
 }
 
 function isBg(cls) { return BACKGROUND.has(cls) || getZeroWeights().has(cls) }
@@ -28,7 +30,7 @@ function faultColor(prob) {
 
 export default function DiagnosticsPage({ waveData, predictions, sourceValues, elapsed, showDots = true }) {
   const [micVol, setMicVol] = useState(70)
-  const [view, setView]     = useState('side')
+  const [view, setView]     = useState('3d')
   const t = useLang()
 
   const sorted    = predictions ? Object.entries(predictions).sort((a, b) => b[1] - a[1]) : []
@@ -182,6 +184,9 @@ export default function DiagnosticsPage({ waveData, predictions, sourceValues, e
               )}
 
               {/* Второстепенные */}
+              {topFaults.slice(1).length > 0 && (
+                <p className="text-[10px] font-semibold text-[#475569] uppercase tracking-wide shrink-0">Другие неисправности</p>
+              )}
               {topFaults.slice(1).map(([cls, prob]) => (
                 <div key={cls} className="flex items-center gap-3 bg-[#1A2235] border border-[#1E2D45] rounded-lg px-3 py-2 shrink-0">
                   <span className="w-2 h-2 rounded-full shrink-0" style={{ background: faultColor(prob) }} />
